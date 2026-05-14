@@ -2874,7 +2874,8 @@ function formExp(e={}, esNuevo=false){
 
 function modalNewExp(){
   moOpen('Nuevo Expediente', formExp({}, true),
-    `<button class="btn btn-sec" onclick="moClose()">Cancelar</button>
+    `<button class="btn btn-sec" onclick="iaAutoLlenarModal('expediente')" style="margin-right:auto;border-color:var(--acc);color:var(--acc)">📄 Autollenar con IA</button>
+     <button class="btn btn-sec" onclick="moClose()">Cancelar</button>
      <button class="btn btn-pri" onclick="saveExp()">Guardar expediente</button>`);
 }
 function modalEditExp(id){
@@ -3347,6 +3348,131 @@ function delPlazo(id){if(!confirm('¿Eliminar?'))return;DB.plazos=DB.plazos.filt
 window._docFiltroExpId = '';
 function docFiltrarExp(expId){ window._docFiltroExpId=expId||''; renderDocs(); }
 
+// ═══════════════════════════════════════════════════
+// IA AUTOLLENADO — lectura de imagen y llenado automático
+// ═══════════════════════════════════════════════════
+
+function fileToBase64(file){
+  return new Promise(function(res,rej){
+    var r=new FileReader();
+    r.onload=function(){res(r.result);};
+    r.onerror=function(){rej(new Error('Error leyendo archivo'));};
+    r.readAsDataURL(file);
+  });
+}
+
+async function iaExtraerTexto(file){
+  var key=iaGetKey();
+  if(!key) throw new Error('Configura tu API key en Configuración → 🤖 IA');
+  var b64=await fileToBase64(file);
+  var rawB64=b64.split(',')[1];
+  var mimeType=file.type;
+  if(!mimeType.startsWith('image/')){
+    throw new Error('Sube una imagen (JPG, PNG). Para PDFs, toma una captura de pantalla.');
+  }
+  var res=await fetch('https://api.deepseek.com/chat/completions',{
+    method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
+    body:JSON.stringify({
+      model:'deepseek-chat',
+      max_tokens:2000,
+      messages:[{role:'user',content:[
+        {type:'image_url',image_url:{url:'data:'+mimeType+';base64,'+rawB64}},
+        {type:'text',text:'Transcribe TODO el texto visible en esta imagen de documento legal/administrativo peruano. Incluye números de expediente, fechas, nombres, entidades, resoluciones. Sé exhaustivo.'}
+      ]}]
+    })
+  });
+  if(!res.ok){var e=await res.json().catch(function(){return {};});throw new Error(e?.error?.message||'Error '+res.status);}
+  var data=await res.json();
+  return data?.choices?.[0]?.message?.content||'';
+}
+
+async function iaAnalizarDoc(textoDoc, modo){
+  var key=iaGetKey();
+  if(!key) throw new Error('Configura tu API key en Configuración → 🤖 IA');
+  var entidades=getEntidades().join(', ');
+  var naturalezas=getNaturalezas().join(', ');
+  var prompt='';
+  if(modo==='expediente'){
+    prompt='Analiza el siguiente texto de un documento legal/administrativo peruano y extrae los campos para crear un expediente. Responde SOLO en JSON válido, sin backticks ni texto adicional: {"administrado":"nombre de la persona o institución involucrada","entidad":"entidad administrativa (debe ser una de: '+entidades+'; si no coincide, pon la más cercana)","naturaleza":"tipo de proceso (debe ser una de: '+naturalezas+'; si no coincide, pon la más cercana)","asunto":"resumen breve del asunto en máximo 2 líneas","numExpediente":"número de expediente si aparece","estado":"Pendiente o En trámite según el contexto","prioridad":"Alta, Media o Baja según urgencia aparente","observaciones":"datos adicionales relevantes"}\n\nTEXTO DEL DOCUMENTO:\n'+textoDoc;
+  } else if(modo==='actuacion'){
+    prompt='Analiza el siguiente texto de un documento legal/administrativo peruano y extrae campos para registrar una actuación procesal. Responde SOLO en JSON válido, sin backticks ni texto adicional: {"tipo":"tipo de actuación (Resolución, Notificación, Auto, Sentencia, Oficio, Requerimiento, etc.)","descripcion":"resumen de lo que dice/ordena el documento","docRef":"número de resolución o documento si aparece","fecNotif":"fecha de notificación si aparece (formato YYYY-MM-DD)","medioNotif":"medio de notificación si se menciona (Casilla electrónica, Física, Correo electrónico, Notarial, SINOE)","plazoDias":"plazo en días hábiles si se menciona","estadoHito":"notificado, respondido o resuelto según contexto","resultado":"resultado o decisión si aparece"}\n\nTEXTO DEL DOCUMENTO:\n'+textoDoc;
+  } else if(modo==='bandeja'){
+    prompt='Analiza el siguiente texto de un documento legal/administrativo peruano y extrae campos para registrarlo en bandeja de entrada. Responde SOLO en JSON válido, sin backticks ni texto adicional: {"tipo":"tipo de documento (Carta, Notificación, Oficio, Memorando, Informe, Resolución, Auto, Sentencia, Requerimiento, Otro)","remitente":"quién envía el documento","asunto":"resumen breve del asunto","observaciones":"datos relevantes adicionales, acciones a tomar"}\n\nTEXTO DEL DOCUMENTO:\n'+textoDoc;
+  }
+  var res=await fetch('https://api.deepseek.com/chat/completions',{
+    method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
+    body:JSON.stringify({
+      model:'deepseek-chat',
+      max_tokens:800,
+      messages:[{role:'user',content:prompt}]
+    })
+  });
+  if(!res.ok){var e=await res.json().catch(function(){return {};});throw new Error(e?.error?.message||'Error '+res.status);}
+  var data=await res.json();
+  var txt=(data?.choices?.[0]?.message?.content||'').trim();
+  try{
+    var clean=txt.replace(/^```json?\n?/,'').replace(/\n?```$/,'').trim();
+    return JSON.parse(clean);
+  }catch(e){
+    console.warn('IA devolvió JSON inválido:',txt);
+    throw new Error('La IA no devolvió datos válidos. Intenta con una imagen más clara.');
+  }
+}
+
+async function iaAutoLlenarModal(modo){
+  var input=document.createElement('input');
+  input.type='file';
+  input.accept='image/*';
+  input.onchange=async function(){
+    var file=input.files[0];
+    if(!file) return;
+    toast('🔍 Leyendo documento con IA…','in');
+    try{
+      var texto=await iaExtraerTexto(file);
+      if(!texto) throw new Error('No se pudo extraer texto del documento');
+      toast('🧠 Analizando contenido…','in');
+      var campos=await iaAnalizarDoc(texto, modo);
+      iaRellenarCampos(campos, modo);
+      toast('✅ Campos autocompletados. Revisa y ajusta.','ok');
+    }catch(e){
+      toast('Error: '+e.message,'er');
+      console.error('iaAutoLlenar:',e);
+    }
+  };
+  input.click();
+}
+
+function iaRellenarCampos(c, modo){
+  if(modo==='expediente'){
+    if(c.administrado){var el=document.getElementById('fad');if(el)el.value=c.administrado;}
+    if(c.asunto){var el=document.getElementById('fas');if(el)el.value=c.asunto;}
+    if(c.numExpediente){var el=document.getElementById('fnx');if(el)el.value=c.numExpediente;}
+    if(c.observaciones){var el=document.getElementById('fob');if(el)el.value=c.observaciones;}
+    if(c.entidad){var el=document.getElementById('fen');if(el){el.value=c.entidad;autoFillCodigo();}}
+    if(c.naturaleza){var el=document.getElementById('fna');if(el){el.value=c.naturaleza;autoFillCodigo();}}
+    if(c.estado){var el=document.getElementById('fes');if(el)el.value=c.estado;}
+    if(c.prioridad){var el=document.getElementById('fpr');if(el)el.value=c.prioridad;}
+  } else if(modo==='actuacion'){
+    if(c.tipo){var el=document.getElementById('nr-tipo');if(el)el.value=c.tipo;}
+    if(c.descripcion){var el=document.getElementById('nr-desc');if(el)el.value=c.descripcion;}
+    if(c.docRef){var el=document.getElementById('nr-docref');if(el)el.value=c.docRef;}
+    if(c.fecNotif){var el=document.getElementById('nr-fec-notif');if(el)el.value=c.fecNotif;}
+    if(c.medioNotif){var el=document.getElementById('nr-medio-notif');if(el)el.value=c.medioNotif;}
+    if(c.plazoDias){var el=document.getElementById('nr-plazo-dias');if(el)el.value=c.plazoDias;}
+    if(c.estadoHito){var el=document.getElementById('nr-estado-hito');if(el)el.value=c.estadoHito;}
+    if(c.resultado){var el=document.getElementById('nr-resultado');if(el)el.value=c.resultado;}
+    var sel=document.getElementById('nr-tipo-reg');
+    if(sel){sel.value='documento';docToggleTipoReg('documento');}
+  } else if(modo==='bandeja'){
+    if(c.tipo){var el=document.getElementById('bj-ftipo');if(el)el.value=c.tipo;}
+    if(c.remitente){var el=document.getElementById('bj-fremitente');if(el)el.value=c.remitente;}
+    if(c.asunto){var el=document.getElementById('bj-fasunto');if(el)el.value=c.asunto;}
+    if(c.observaciones){var el=document.getElementById('bj-fobs');if(el)el.value=c.observaciones;}
+  }
+}
+
 // Renderiza la línea de trazabilidad de un documento
 function docRenderTraz(t){
   if(!t) return '';
@@ -3593,7 +3719,8 @@ function modalNuevoRegistro(preExpId='', preTipo='', preDesc='', preDocRef=''){
         </div>
       </div>
     </div>`,
-  `<button class="btn btn-sec" onclick="moClose()">Cancelar</button>
+  `<button class="btn btn-sec" onclick="iaAutoLlenarModal('actuacion')" style="margin-right:auto;border-color:var(--acc);color:var(--acc)">📄 Autollenar con IA</button>
+   <button class="btn btn-sec" onclick="moClose()">Cancelar</button>
    <button class="btn btn-pri" onclick="docGuardarRegistro()">Guardar</button>`);
   // Mostrar/ocultar trazabilidad según tipo inicial
   docToggleTipoReg('actuacion');
@@ -3998,7 +4125,8 @@ function modalNuevoBandeja(d={}){
         <textarea id="bj-fobs" class="s-inp" style="width:100%;resize:vertical;min-height:64px;padding:9px 13px" placeholder="Notas internas, acción a tomar, etc.">${d.observaciones||''}</textarea>
       </div>
     </div>`,
-  `<button class="btn btn-sec" onclick="moClose()">Cancelar</button>
+  `<button class="btn btn-sec" onclick="iaAutoLlenarModal('bandeja')" style="margin-right:auto;border-color:var(--acc);color:var(--acc)">📄 Autollenar con IA</button>
+   <button class="btn btn-sec" onclick="moClose()">Cancelar</button>
    <button class="btn btn-pri" onclick="bandejaGuardar()">Guardar y asignar código</button>`);
   setTimeout(()=>document.getElementById('bj-fremitente')?.focus(),80);
 }
