@@ -1194,9 +1194,10 @@ function odHandleRedirect(){
     window.location.hash='';
     // Restaurar sesión de usuario previa al redirect
     try{
-      const saved=sessionStorage.getItem('lxo_current_user');
+      const saved=localStorage.getItem('lxo_od_pending_user');
       if(saved){
         currentUser=JSON.parse(saved);
+        localStorage.removeItem('lxo_od_pending_user');
         // Saltar login y mostrar app directamente
         const lw=document.getElementById('login-wrap');
         const app=document.getElementById('app');
@@ -1366,6 +1367,10 @@ function startApp(){
   // Manejar redirect de OneDrive
   if(odHandleRedirect()){ bootApp(); return; }
   // Si hay token, intentar cargar desde OneDrive
+  // Limpiar sesión temporal si no viene redirect de OneDrive
+  if(!window.location.hash.includes('access_token')){
+    localStorage.removeItem('lxo_od_pending_user');
+  }
   if(odIsConnected()){
     odSyncDown().then(remoteDB=>{
       if(remoteDB){
@@ -1454,7 +1459,7 @@ function doLogin(){
   }
   currentUser=found;
   // Guardar sesión para restaurar tras redirect de OneDrive
-  sessionStorage.setItem('lxo_current_user', JSON.stringify(found));
+  localStorage.setItem('lxo_od_pending_user', JSON.stringify(found));
   document.getElementById('login-wrap').style.display='none';
   document.getElementById('app').style.display='flex';
   document.getElementById('sb-av').textContent=found.name[0];
