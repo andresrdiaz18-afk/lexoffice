@@ -1157,8 +1157,8 @@ function defaultData(){
 // ══════════════════════════════════════════════
 const OD_CLIENT_ID = '65b35655-c86c-4e2c-9346-f142ed010e36';
 const OD_REDIRECT  = 'https://andresrdiaz18-afk.github.io/lexoffice/';
-const OD_SCOPES    = 'Files.ReadWrite offline_access';
-const OD_FILE      = '/me/drive/special/approot:/LexOffice/lexoffice_backup.json:/content';
+const OD_SCOPES    = 'Files.ReadWrite';
+const OD_FILE      = '/me/drive/root:/LexOffice/lexoffice_backup.json:/content';
 const OD_TOKEN_KEY = 'lxo_od_token';
 const OD_SYNC_DELAY= 4000; // ms después de saveDB para sincronizar
 
@@ -1505,6 +1505,7 @@ function doLogin(){
 }
 
 function doLogout(){
+  localStorage.removeItem('lxo_session_user');
   detenerFrases();
   currentUser=null;
   document.getElementById('app').style.display='none';
@@ -4938,7 +4939,25 @@ window.addEventListener('resize',()=>{
 // ══════════════════════════════════════════════
 function bootApp(){
   // Inicializar UI de OneDrive
-  setTimeout(()=>{ odUpdateUI(); odHandleRedirect(); }, 200);
+  setTimeout(()=>{ odUpdateUI(); }, 200);
+  // Restaurar sesión si existe (para no pedir login tras acciones en la app)
+  try{
+    const saved=localStorage.getItem('lxo_session_user');
+    if(saved&&!currentUser){
+      const u=JSON.parse(saved);
+      const found=DB.users.find(x=>x.user===u.user&&x.pass===u.pass);
+      if(found){
+        currentUser=found;
+        document.getElementById('login-wrap').style.display='none';
+        document.getElementById('app').style.display='flex';
+        document.getElementById('sb-av').textContent=found.name[0];
+        document.getElementById('sb-name').textContent=found.name;
+        document.getElementById('sb-role').textContent=found.role==='admin'?'Administrador':'Asistente';
+        navigate('dashboard');
+        return;
+      }
+    }
+  }catch(e){}
   // Aplicar tema guardado
   if(localStorage.getItem('lxo_theme')==='light')document.body.classList.add('light');
   // Aplicar configuración
