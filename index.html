@@ -1192,6 +1192,18 @@ function odHandleRedirect(){
   if(token){
     odSetToken(token);
     window.location.hash='';
+    // Restaurar sesión de usuario previa al redirect
+    try{
+      const saved=sessionStorage.getItem('lxo_current_user');
+      if(saved){
+        currentUser=JSON.parse(saved);
+        // Saltar login y mostrar app directamente
+        const lw=document.getElementById('login-wrap');
+        const app=document.getElementById('app');
+        if(lw) lw.style.display='none';
+        if(app) app.style.display='flex';
+      }
+    }catch(e){}
     toast('✅ OneDrive conectado correctamente','ok');
     odSyncUp();
     odUpdateUI();
@@ -1441,6 +1453,8 @@ function doLogin(){
     return;
   }
   currentUser=found;
+  // Guardar sesión para restaurar tras redirect de OneDrive
+  sessionStorage.setItem('lxo_current_user', JSON.stringify(found));
   document.getElementById('login-wrap').style.display='none';
   document.getElementById('app').style.display='flex';
   document.getElementById('sb-av').textContent=found.name[0];
