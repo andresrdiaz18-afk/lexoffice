@@ -1424,6 +1424,20 @@ function startApp(){
 
 // Arranque: IDB en paralelo — el login aparece de inmediato
 (function(){
+  // ── DETECCIÓN TEMPRANA: ¿somos el popup de OneDrive? ──
+  if(window.location.hash.includes('access_token') && window.opener){
+    try{
+      const params=new URLSearchParams(window.location.hash.substring(1));
+      const token=params.get('access_token');
+      if(token){
+        window.opener.postMessage({type:'od_token', token:token}, '*');
+        document.body.innerHTML='<div style="font-family:sans-serif;text-align:center;padding:60px;color:#888"><p>✅ OneDrive conectado.<br>Cerrando ventana…</p></div>';
+        setTimeout(()=>window.close(), 800);
+        return; // No inicializar la app
+      }
+    }catch(e){ window.close(); return; }
+  }
+
   // 1. Mostrar login de inmediato con datos por defecto
   DB=defaultData();
   // 2. Intentar cargar IDB en background y reemplazar DB si hay datos guardados
@@ -4990,8 +5004,6 @@ function bootApp(){
   });
 }
 
-// Arrancar IndexedDB → luego bootApp
-initDB();
 </script>
 </body>
 </html>
