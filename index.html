@@ -1169,79 +1169,146 @@ let _odSyncing = false;
 // ── Token ──
 function odGetToken(){ return _odToken || localStorage.getItem(OD_TOKEN_KEY) || ''; }
 function odSetToken(t){ _odToken=t; localStorage.setItem(OD_TOKEN_KEY,t); }
-function odClearToken(){ _odToken=''; localStorage.removeItem(OD_TOKEN_KEY); }
+function odClearToken(){ _odToken=''; localStorage.removeItem(OD_TOKEN_KEY); localStorage.removeItem('lxo_od_refresh'); }
 function odIsConnected(){ return !!odGetToken(); }
 
-// ── Login MSAL implícito (token en hash) ──
-function odLogin(){
+// ── PKCE Helpers (Authorization Code Flow — exigido por Microsoft para SPA) ──
+function odBase64Url(buf){
+  return btoa(String.fromCharCode(...new Uint8Array(buf)))
+    .replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+}
+async function odSha256(str){
+  const data=new TextEncoder().encode(str);
+  return await crypto.subtle.digest('SHA-256',data);
+}
+function odRandomString(len){
+  const arr=new Uint8Array(len);
+  crypto.getRandomValues(arr);
+  return Array.from(arr,b=>('0'+b.toString(16)).slice(-2)).join('');
+}
+
+// ── Login OneDrive con PKCE ──
+async function odLogin(){
+  // 1. Generar code_verifier y code_challenge
+  const verifier=odRandomString(64);
+  const challenge=odBase64Url(await odSha256(verifier));
+  sessionStorage.setItem('lxo_od_verifier',verifier);
+
   const url=`https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize`
     +`?client_id=${OD_CLIENT_ID}`
-    +`&response_type=token`
+    +`&response_type=code`
     +`&redirect_uri=${encodeURIComponent(OD_REDIRECT)}`
     +`&scope=${encodeURIComponent(OD_SCOPES)}`
-    +`&response_mode=fragment`
+    +`&code_challenge=${challenge}`
+    +`&code_challenge_method=S256`
     +`&prompt=select_account`;
 
-  // Abrir popup en lugar de redirect — la app principal no se recarga
   const popup=window.open(url,'od_login','width=500,height=650,left=200,top=100');
   if(!popup){ toast('Habilita las ventanas emergentes para conectar OneDrive','er'); return; }
 
-  // Escuchar mensaje del popup
-  const handler=e=>{
-    if(e.data?.type==='od_token'){
+  // Escuchar el código de autorización del popup
+  const handler=async e=>{
+    if(e.data?.type==='od_code'){
       window.removeEventListener('message',handler);
-      odSetToken(e.data.token);
-      toast('✅ OneDrive conectado correctamente','ok');
-      odSyncUp();
-      odUpdateUI();
+      await odExchangeCode(e.data.code);
     }
   };
   window.addEventListener('message',handler);
 
-  // Polling como fallback: revisar la URL del popup
+  // Polling fallback
   const poll=setInterval(()=>{
     try{
-      const hash=popup.location.hash;
-      if(hash.includes('access_token')){
+      if(popup.closed){ clearInterval(poll); return; }
+      const u=new URL(popup.location.href);
+      const code=u.searchParams.get('code');
+      if(code){
         clearInterval(poll);
-        const params=new URLSearchParams(hash.substring(1));
-        const token=params.get('access_token');
-        if(token){
-          popup.close();
-          odSetToken(token);
-          toast('✅ OneDrive conectado correctamente','ok');
-          odSyncUp();
-          odUpdateUI();
-        }
+        popup.close();
+        odExchangeCode(code);
       }
-    }catch(e){
-      // Cross-origin: esperando que Microsoft redirija de vuelta
-    }
-    if(popup.closed){ clearInterval(poll); }
+    }catch(e){ /* cross-origin, esperando */ }
   },500);
 }
 
+// ── Intercambiar code por access_token ──
+async function odExchangeCode(code){
+  const verifier=sessionStorage.getItem('lxo_od_verifier');
+  if(!verifier){ toast('Error de sesión OAuth. Reintenta.','er'); return; }
+  try{
+    const body=new URLSearchParams({
+      client_id:OD_CLIENT_ID,
+      grant_type:'authorization_code',
+      code:code,
+      redirect_uri:OD_REDIRECT,
+      code_verifier:verifier,
+      scope:OD_SCOPES
+    });
+    const res=await fetch('https://login.microsoftonline.com/consumers/oauth2/v2.0/token',{
+      method:'POST',
+      headers:{'Content-Type':'application/x-www-form-urlencoded'},
+      body:body.toString()
+    });
+    const data=await res.json();
+    if(data.access_token){
+      odSetToken(data.access_token);
+      if(data.refresh_token) localStorage.setItem('lxo_od_refresh',data.refresh_token);
+      sessionStorage.removeItem('lxo_od_verifier');
+      toast('✅ OneDrive conectado correctamente','ok');
+      odSyncUp();
+      odUpdateUI();
+    } else {
+      console.error('Token exchange falló:',data);
+      toast('Error al conectar OneDrive: '+(data.error_description||data.error||'desconocido'),'er');
+    }
+  }catch(e){
+    console.error('odExchangeCode error:',e);
+    toast('Error al conectar OneDrive','er');
+  }
+}
+
+// ── Renovar token con refresh_token ──
+async function odRefreshToken(){
+  const refresh=localStorage.getItem('lxo_od_refresh');
+  if(!refresh) return false;
+  try{
+    const body=new URLSearchParams({
+      client_id:OD_CLIENT_ID,
+      grant_type:'refresh_token',
+      refresh_token:refresh,
+      scope:OD_SCOPES
+    });
+    const res=await fetch('https://login.microsoftonline.com/consumers/oauth2/v2.0/token',{
+      method:'POST',
+      headers:{'Content-Type':'application/x-www-form-urlencoded'},
+      body:body.toString()
+    });
+    const data=await res.json();
+    if(data.access_token){
+      odSetToken(data.access_token);
+      if(data.refresh_token) localStorage.setItem('lxo_od_refresh',data.refresh_token);
+      return true;
+    }
+  }catch(e){ console.warn('Refresh falló:',e); }
+  return false;
+}
+
 function odHandleRedirect(){
-  // Solo para cuando se abre directamente como popup de retorno
-  const hash=window.location.hash;
-  if(!hash.includes('access_token')) return false;
-  const params=new URLSearchParams(hash.substring(1));
-  const token=params.get('access_token');
-  if(token){
-    // Intentar comunicar al padre si somos un popup
+  // Detecta el código de autorización en la URL (cuando el popup vuelve de Microsoft)
+  const params=new URLSearchParams(window.location.search);
+  const code=params.get('code');
+  if(code){
     try{
       if(window.opener){
-        window.opener.postMessage({type:'od_token',token},'*');
+        window.opener.postMessage({type:'od_code',code:code},'*');
         window.close();
         return true;
       }
     }catch(e){}
-    // Fallback: guardar token y limpiar hash
-    odSetToken(token);
-    window.location.hash='';
-    toast('✅ OneDrive conectado','ok');
-    odSyncUp();
-    odUpdateUI();
+    // Fallback si no es popup
+    odExchangeCode(code).then(()=>{
+      window.history.replaceState({},'',OD_REDIRECT);
+    });
+    return true;
   }
   return false;
 }
@@ -1265,7 +1332,11 @@ async function odSyncUp(){
       },
       body:payload
     });
-    if(res.status===401){ odClearToken(); odSetSyncIndicator('disconnected'); return; }
+    if(res.status===401){
+      const refreshed=await odRefreshToken();
+      if(refreshed){ _odSyncing=false; return odSyncUp(); }
+      odClearToken(); odSetSyncIndicator('disconnected'); return;
+    }
     if(!res.ok) throw new Error(`HTTP ${res.status}`);
     odSetSyncIndicator('ok');
     localStorage.setItem('lxo_od_last_sync', new Date().toISOString());
@@ -1286,7 +1357,11 @@ async function odSyncDown(){
       headers:{'Authorization':`Bearer ${token}`}
     });
     if(res.status===404) return null; // primera vez, no hay backup aún
-    if(res.status===401){ odClearToken(); return null; }
+    if(res.status===401){
+      const refreshed=await odRefreshToken();
+      if(refreshed) return odSyncDown();
+      odClearToken(); return null;
+    }
     if(!res.ok) return null;
     const data=await res.json();
     if(data?.DB?.expedientes) return data.DB;
@@ -1425,16 +1500,19 @@ function startApp(){
 // Arranque: IDB en paralelo — el login aparece de inmediato
 (function(){
   // ── DETECCIÓN TEMPRANA: ¿somos el popup de OneDrive? ──
-  if(window.location.hash.includes('access_token') && window.opener){
+  const _earlyParams=new URLSearchParams(window.location.search);
+  const _earlyCode=_earlyParams.get('code');
+  const _earlyError=_earlyParams.get('error');
+  if((_earlyCode||_earlyError) && window.opener){
     try{
-      const params=new URLSearchParams(window.location.hash.substring(1));
-      const token=params.get('access_token');
-      if(token){
-        window.opener.postMessage({type:'od_token', token:token}, '*');
-        document.body.innerHTML='<div style="font-family:sans-serif;text-align:center;padding:60px;color:#888"><p>✅ OneDrive conectado.<br>Cerrando ventana…</p></div>';
-        setTimeout(()=>window.close(), 800);
-        return; // No inicializar la app
+      if(_earlyCode){
+        window.opener.postMessage({type:'od_code', code:_earlyCode}, '*');
+        document.body.innerHTML='<div style="font-family:sans-serif;text-align:center;padding:60px;color:#888"><p>✅ Autorización recibida.<br>Cerrando ventana…</p></div>';
+      } else {
+        document.body.innerHTML='<div style="font-family:sans-serif;text-align:center;padding:60px;color:#c33"><p>⚠️ '+(_earlyParams.get('error_description')||_earlyError)+'</p></div>';
       }
+      setTimeout(()=>window.close(), 1000);
+      return; // No inicializar la app
     }catch(e){ window.close(); return; }
   }
 
