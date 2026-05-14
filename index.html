@@ -1181,34 +1181,67 @@ function odLogin(){
     +`&scope=${encodeURIComponent(OD_SCOPES)}`
     +`&response_mode=fragment`
     +`&prompt=select_account`;
-  window.location.href=url;
+
+  // Abrir popup en lugar de redirect — la app principal no se recarga
+  const popup=window.open(url,'od_login','width=500,height=650,left=200,top=100');
+  if(!popup){ toast('Habilita las ventanas emergentes para conectar OneDrive','er'); return; }
+
+  // Escuchar mensaje del popup
+  const handler=e=>{
+    if(e.data?.type==='od_token'){
+      window.removeEventListener('message',handler);
+      odSetToken(e.data.token);
+      toast('✅ OneDrive conectado correctamente','ok');
+      odSyncUp();
+      odUpdateUI();
+    }
+  };
+  window.addEventListener('message',handler);
+
+  // Polling como fallback: revisar la URL del popup
+  const poll=setInterval(()=>{
+    try{
+      const hash=popup.location.hash;
+      if(hash.includes('access_token')){
+        clearInterval(poll);
+        const params=new URLSearchParams(hash.substring(1));
+        const token=params.get('access_token');
+        if(token){
+          popup.close();
+          odSetToken(token);
+          toast('✅ OneDrive conectado correctamente','ok');
+          odSyncUp();
+          odUpdateUI();
+        }
+      }
+    }catch(e){
+      // Cross-origin: esperando que Microsoft redirija de vuelta
+    }
+    if(popup.closed){ clearInterval(poll); }
+  },500);
 }
 
 function odHandleRedirect(){
+  // Solo para cuando se abre directamente como popup de retorno
   const hash=window.location.hash;
   if(!hash.includes('access_token')) return false;
   const params=new URLSearchParams(hash.substring(1));
   const token=params.get('access_token');
   if(token){
-    odSetToken(token);
-    window.location.hash='';
-    // Restaurar sesión de usuario previa al redirect
+    // Intentar comunicar al padre si somos un popup
     try{
-      const saved=localStorage.getItem('lxo_od_pending_user');
-      if(saved){
-        currentUser=JSON.parse(saved);
-        localStorage.removeItem('lxo_od_pending_user');
-        // Saltar login y mostrar app directamente
-        const lw=document.getElementById('login-wrap');
-        const app=document.getElementById('app');
-        if(lw) lw.style.display='none';
-        if(app) app.style.display='flex';
+      if(window.opener){
+        window.opener.postMessage({type:'od_token',token},'*');
+        window.close();
+        return true;
       }
     }catch(e){}
-    toast('✅ OneDrive conectado correctamente','ok');
+    // Fallback: guardar token y limpiar hash
+    odSetToken(token);
+    window.location.hash='';
+    toast('✅ OneDrive conectado','ok');
     odSyncUp();
     odUpdateUI();
-    return true;
   }
   return false;
 }
@@ -1367,10 +1400,6 @@ function startApp(){
   // Manejar redirect de OneDrive
   if(odHandleRedirect()){ bootApp(); return; }
   // Si hay token, intentar cargar desde OneDrive
-  // Limpiar sesión temporal si no viene redirect de OneDrive
-  if(!window.location.hash.includes('access_token')){
-    localStorage.removeItem('lxo_od_pending_user');
-  }
   if(odIsConnected()){
     odSyncDown().then(remoteDB=>{
       if(remoteDB){
@@ -1459,7 +1488,7 @@ function doLogin(){
   }
   currentUser=found;
   // Guardar sesión para restaurar tras redirect de OneDrive
-  localStorage.setItem('lxo_od_pending_user', JSON.stringify(found));
+  
   document.getElementById('login-wrap').style.display='none';
   document.getElementById('app').style.display='flex';
   document.getElementById('sb-av').textContent=found.name[0];
