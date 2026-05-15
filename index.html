@@ -1160,7 +1160,7 @@ const OD_REDIRECT  = 'https://andresrdiaz18-afk.github.io/lexoffice/';
 const OD_SCOPES    = 'Files.ReadWrite';
 const OD_FILE      = '/me/drive/root:/LexOffice/lexoffice_backup.json:/content';
 const OD_TOKEN_KEY = 'lxo_od_token';
-const OD_SYNC_DELAY= 4000; // ms después de saveDB para sincronizar
+const OD_SYNC_DELAY= 1000; // ms después de saveDB para sincronizar (1 segundo)
 
 let _odToken = null;
 let _odSyncTimer = null;
@@ -1351,22 +1351,32 @@ async function odSyncUp(){
 // ── Descargar backup desde OneDrive ──
 async function odSyncDown(){
   const token=odGetToken();
-  if(!token) return null;
+  if(!token){ console.warn('odSyncDown: sin token'); return null; }
   try{
-    const res=await fetch(`https://graph.microsoft.com/v1.0${OD_FILE}`,{
-      headers:{'Authorization':`Bearer ${token}`}
-    });
-    if(res.status===404) return null; // primera vez, no hay backup aún
-    if(res.status===401){
-      const refreshed=await odRefreshToken();
+    // Paso 1: obtener URL de descarga del archivo
+    var metaUrl='https://graph.microsoft.com/v1.0/me/drive/root:/LexOffice/lexoffice_backup.json';
+    var metaRes=await fetch(metaUrl,{headers:{'Authorization':'Bearer '+token}});
+    if(metaRes.status===404){ console.warn('odSyncDown: archivo no existe en OneDrive'); return null; }
+    if(metaRes.status===401){
+      var refreshed=await odRefreshToken();
       if(refreshed) return odSyncDown();
       odClearToken(); return null;
     }
-    if(!res.ok) return null;
-    const data=await res.json();
+    if(!metaRes.ok){ console.warn('odSyncDown: error metadata HTTP',metaRes.status); return null; }
+    var meta=await metaRes.json();
+    var downloadUrl=meta['@microsoft.graph.downloadUrl'];
+    if(!downloadUrl){ console.warn('odSyncDown: no hay downloadUrl en metadata'); return null; }
+
+    // Paso 2: descargar el contenido real del archivo
+    var fileRes=await fetch(downloadUrl);
+    if(!fileRes.ok){ console.warn('odSyncDown: error descarga HTTP',fileRes.status); return null; }
+    var txt=await fileRes.text();
+    var data=JSON.parse(txt);
+    console.info('odSyncDown: archivo descargado,',data?.DB?.expedientes?.length||0,'expedientes');
     if(data?.DB?.expedientes) return data.DB;
+    console.warn('odSyncDown: JSON válido pero sin DB.expedientes');
     return null;
-  }catch(e){ console.warn('OneDrive download error:',e); return null; }
+  }catch(e){ console.error('odSyncDown error:',e); return null; }
 }
 
 // ── Sincronización diferida (no bloquea cada keystroke) ──
@@ -5149,6 +5159,8 @@ window.addEventListener('resize',()=>{
 function bootApp(){
   // Inicializar UI de OneDrive
   setTimeout(()=>{ odUpdateUI(); }, 200);
+  // Sincronizar al cerrar la pestaña como respaldo
+  window.addEventListener('beforeunload',function(){ if(odIsConnected()){ navigator.sendBeacon||odSyncUp(); } });
   // Restaurar sesión si existe (para no pedir login tras acciones en la app)
   try{
     const saved=localStorage.getItem('lxo_session_user');
