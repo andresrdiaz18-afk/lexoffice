@@ -939,7 +939,7 @@ table.tbl td{padding:10px 14px;font-size:13px;vertical-align:middle;}
         <div class="cfg-sec">
           <div class="cfg-sec-tit">Costo estimado</div>
           <div class="ic">
-            <div class="ic-row"><span class="ic-k">Modelo usado</span><span class="ic-v">Gemini 2.0 Flash (con fallback)</span></div>
+            <div class="ic-row"><span class="ic-k">Modelo usado</span><span class="ic-v">Gemini 2.5 Flash Lite (con fallback)</span></div>
             <div class="ic-row"><span class="ic-k">Costo</span><span class="ic-v" style="color:var(--grn)">Gratuito (límite generoso diario)</span></div>
             <div class="ic-row"><span class="ic-k">Tarjeta requerida</span><span class="ic-v" style="color:var(--grn)">No</span></div>
           </div>
@@ -1755,7 +1755,7 @@ async function iaLlamar(prompt){
   const key=iaGetKey();
   if(!key) throw new Error('Sin API key. Configúrala en Configuración → 🤖 IA');
 
-  const modelos=['gemini-2.0-flash','gemini-1.5-flash'];
+  const modelos=['gemini-2.5-flash-lite','gemini-2.0-flash'];
   let ultimoError='';
   for(var m=0;m<modelos.length;m++){
     var modelo=modelos[m];
@@ -1945,7 +1945,7 @@ function iaGuardarBitacora(expId){
     fecha:new Date().toISOString(),
     tipo:'Borrador generado por IA',
     descripcion:window._iaUltimoTexto.substring(0,500)+(window._iaUltimoTexto.length>500?'…':''),
-    docRef:'Generado automáticamente con Gemini Flash',
+    docRef:'Generado automáticamente con Gemini 2.5 Flash Lite',
     usuario:currentUser?.name||'—'
   });
   const i=DB.expedientes.findIndex(x=>x.id===expId);
@@ -3365,7 +3365,7 @@ async function iaExtraerTexto(file){
   if(!mimeType.startsWith('image/')){
     throw new Error('Sube una imagen (JPG, PNG). Para PDFs, toma una captura de pantalla.');
   }
-  var modelos=['gemini-2.0-flash','gemini-1.5-flash'];
+  var modelos=['gemini-2.5-flash-lite','gemini-2.0-flash'];
   var errorUltimo='';
   for(var m=0;m<modelos.length;m++){
     try{
@@ -3394,7 +3394,7 @@ async function iaAnalizarDoc(textoDoc, modo){
   } else if(modo==='bandeja'){
     prompt='Analiza el siguiente texto de un documento legal/administrativo peruano y extrae campos para registrarlo en bandeja de entrada. Responde SOLO en JSON válido, sin backticks ni texto adicional: {"tipo":"tipo de documento (Carta, Notificación, Oficio, Memorando, Informe, Resolución, Auto, Sentencia, Requerimiento, Otro)","remitente":"quién envía el documento","asunto":"resumen breve del asunto","observaciones":"datos relevantes adicionales, acciones a tomar"}\n\nTEXTO DEL DOCUMENTO:\n'+textoDoc;
   }
-  var modelos=['gemini-2.0-flash','gemini-1.5-flash'];
+  var modelos=['gemini-2.5-flash-lite','gemini-2.0-flash'];
   var errorUltimo='';
   var txt='';
   for(var m=0;m<modelos.length;m++){
@@ -3847,7 +3847,7 @@ async function docProcesarArchivo(file){
       const rawB64=b64.split(',')[1];
       const mimeType=file.type;
       let texto='';
-      const modelos=['gemini-2.0-flash','gemini-1.5-flash'];
+      const modelos=['gemini-2.5-flash-lite','gemini-2.0-flash'];
       let errorUltimo='';
       for(const modelo of modelos){
         try{
