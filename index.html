@@ -1010,7 +1010,7 @@ table.tbl td{padding:10px 14px;font-size:13px;vertical-align:middle;}
             <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
               <button class="btn btn-sec btn-sm" onclick="odIsConnected()?odDisconnect():odLogin()" id="cfg-od-btn">Conectar OneDrive</button>
               <button class="btn btn-sec btn-sm" onclick="odSyncUp().then(()=>toast('Backup subido a OneDrive','ok'))">⬆ Subir ahora</button>
-              <button class="btn btn-sec btn-sm" onclick="odSyncDown().then(d=>{if(d){DB=d;saveDB();toast('Datos restaurados desde OneDrive','ok');navigate(currentPage);}else toast('No se encontró backup en OneDrive','er')})">⬇ Restaurar desde OneDrive</button>
+              <button class="btn btn-sec btn-sm" onclick="odSyncDown().then(d=>{if(d){DB=d;if(!Array.isArray(DB.bitacora))DB.bitacora=[];if(!Array.isArray(DB.historial))DB.historial=[];if(!Array.isArray(DB.bandeja))DB.bandeja=[];idbPut(IDB_KEY_DB,DB).catch(function(){});toast('✅ '+DB.expedientes.length+' expedientes restaurados desde OneDrive','ok');navigate(currentPage);}else toast('No se encontró backup en OneDrive. Verifica la conexión.','er')})">⬇ Restaurar desde OneDrive</button>
             </div>
             <div class="ic-row"><span class="ic-k">Navegador recomendado</span><span class="ic-v">Chrome / Edge</span></div>
             <div class="ic-row"><span class="ic-k">Módulos</span><span class="ic-v" style="color:var(--grn)">4 activos</span></div>
@@ -1254,7 +1254,19 @@ async function odExchangeCode(code){
       if(data.refresh_token) localStorage.setItem('lxo_od_refresh',data.refresh_token);
       sessionStorage.removeItem('lxo_od_verifier');
       toast('✅ OneDrive conectado correctamente','ok');
-      odSyncUp();
+      // PRIMERO descargar, LUEGO subir — para no sobrescribir datos remotos con locales viejos
+      var remoto=await odSyncDown();
+      if(remoto && remoto.expedientes && remoto.expedientes.length > DB.expedientes.length){
+        DB=remoto;
+        if(!Array.isArray(DB.bitacora)) DB.bitacora=[];
+        if(!Array.isArray(DB.historial)) DB.historial=[];
+        if(!Array.isArray(DB.bandeja)) DB.bandeja=[];
+        idbPut(IDB_KEY_DB,DB).catch(function(){});
+        toast('☁️ '+remoto.expedientes.length+' expedientes cargados desde OneDrive','ok');
+        navigate(currentPage);
+      } else {
+        odSyncUp();
+      }
       odUpdateUI();
     } else {
       console.error('Token exchange falló:',data);
@@ -3428,27 +3440,108 @@ async function iaAnalizarDoc(textoDoc, modo){
   }
 }
 
-async function iaAutoLlenarModal(modo){
+// Páginas acumuladas para autollenado multipágina
+window._iaPages = [];
+
+function iaAutoLlenarModal(modo){
+  window._iaPages = [];
+  window._iaModo = modo;
+  // Crear mini-modal de captura
+  var overlay=document.createElement('div');
+  overlay.id='ia-capture-overlay';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.innerHTML=`
+    <div style="background:var(--sur);border-radius:18px;padding:24px;max-width:340px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.5)">
+      <div style="font-size:15px;font-weight:600;color:var(--txt);margin-bottom:6px">📄 Autollenar con IA</div>
+      <div style="font-size:12px;color:var(--txt2);margin-bottom:16px">Puedes agregar varias páginas del mismo documento antes de analizar.</div>
+      <div id="ia-pages-list" style="margin-bottom:14px;display:flex;flex-wrap:wrap;gap:8px"></div>
+      <div style="display:flex;gap:8px;margin-bottom:14px">
+        <button onclick="iaCapturarImagen('camera')" style="flex:1;padding:10px;border-radius:10px;border:1.5px solid var(--acc);background:transparent;color:var(--acc);font-size:13px;cursor:pointer">📷 Cámara</button>
+        <button onclick="iaCapturarImagen('gallery')" style="flex:1;padding:10px;border-radius:10px;border:1.5px solid var(--brd);background:transparent;color:var(--txt);font-size:13px;cursor:pointer">🖼 Galería</button>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button onclick="iaCerrarCaptura()" style="flex:1;padding:10px;border-radius:10px;border:1px solid var(--brd);background:transparent;color:var(--txt2);font-size:13px;cursor:pointer">Cancelar</button>
+        <button id="ia-analizar-btn" onclick="iaAnalizarPaginas()" style="flex:1;padding:10px;border-radius:10px;background:var(--acc);color:#fff;font-size:13px;cursor:pointer;border:none;opacity:.4;pointer-events:none">Analizar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+}
+
+function iaCapturarImagen(fuente){
   var input=document.createElement('input');
   input.type='file';
   input.accept='image/*';
-  input.onchange=async function(){
-    var file=input.files[0];
-    if(!file) return;
-    toast('🔍 Leyendo documento con IA…','in');
-    try{
-      var texto=await iaExtraerTexto(file);
-      if(!texto) throw new Error('No se pudo extraer texto del documento');
-      toast('🧠 Analizando contenido…','in');
-      var campos=await iaAnalizarDoc(texto, modo);
-      iaRellenarCampos(campos, modo);
-      toast('✅ Campos autocompletados. Revisa y ajusta.','ok');
-    }catch(e){
-      toast('Error: '+e.message,'er');
-      console.error('iaAutoLlenar:',e);
-    }
+  if(fuente==='camera') input.capture='environment';
+  input.onchange=function(){
+    if(!input.files||!input.files.length) return;
+    Array.from(input.files).forEach(function(file){
+      var reader=new FileReader();
+      reader.onload=function(e){
+        window._iaPages.push({file:file, b64:e.target.result});
+        iaActualizarPreview();
+      };
+      reader.readAsDataURL(file);
+    });
   };
+  input.multiple = (fuente==='gallery');
   input.click();
+}
+
+function iaActualizarPreview(){
+  var lista=document.getElementById('ia-pages-list');
+  var btn=document.getElementById('ia-analizar-btn');
+  if(!lista) return;
+  lista.innerHTML=window._iaPages.map(function(p,i){
+    return '<div style="position:relative;display:inline-block">'
+      +'<img src="'+p.b64+'" style="width:56px;height:72px;object-fit:cover;border-radius:6px;border:2px solid var(--acc)">'
+      +'<button onclick="iaEliminarPagina('+i+')" style="position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;background:var(--red);color:#fff;border:none;font-size:10px;cursor:pointer;line-height:18px;padding:0">✕</button>'
+      +'<div style="font-size:9px;text-align:center;color:var(--txt2);margin-top:2px">Pág '+(i+1)+'</div>'
+      +'</div>';
+  }).join('');
+  if(btn){
+    btn.style.opacity=window._iaPages.length>0?'1':'0.4';
+    btn.style.pointerEvents=window._iaPages.length>0?'auto':'none';
+    btn.textContent='Analizar ('+window._iaPages.length+' pág'+(window._iaPages.length>1?'s':'')+')';
+  }
+}
+
+function iaEliminarPagina(idx){
+  window._iaPages.splice(idx,1);
+  iaActualizarPreview();
+}
+
+function iaCerrarCaptura(){
+  var el=document.getElementById('ia-capture-overlay');
+  if(el) el.remove();
+  window._iaPages=[];
+}
+
+async function iaAnalizarPaginas(){
+  if(!window._iaPages||!window._iaPages.length) return;
+  var modo=window._iaModo;
+  // Cambiar botón a cargando
+  var btn=document.getElementById('ia-analizar-btn');
+  if(btn){btn.textContent='⏳ Procesando…';btn.style.pointerEvents='none';}
+  try{
+    // Extraer texto de todas las páginas y concatenar
+    toast('🔍 Leyendo '+window._iaPages.length+' página(s) con IA…','in');
+    var textos=[];
+    for(var i=0;i<window._iaPages.length;i++){
+      var texto=await iaExtraerTexto(window._iaPages[i].file);
+      if(texto) textos.push('--- Página '+(i+1)+' ---\n'+texto);
+    }
+    var textoCompleto=textos.join('\n\n');
+    if(!textoCompleto) throw new Error('No se pudo extraer texto de las imágenes');
+    toast('🧠 Analizando contenido…','in');
+    var campos=await iaAnalizarDoc(textoCompleto, modo);
+    iaCerrarCaptura();
+    iaRellenarCampos(campos, modo);
+    toast('✅ Campos autocompletados. Revisa y ajusta.','ok');
+  }catch(e){
+    toast('Error: '+e.message,'er');
+    console.error('iaAnalizarPaginas:',e);
+    if(btn){btn.textContent='Analizar';btn.style.pointerEvents='auto';}
+  }
 }
 
 function iaRellenarCampos(c, modo){
