@@ -630,7 +630,12 @@ table.tbl td{padding:10px 14px;font-size:13px;vertical-align:middle;}
         <div class="tag">Arzobispado de Lima</div>
       </div>
       <div class="lf"><label>Usuario</label><input type="text" id="l-user" placeholder="Ingrese su usuario" autocomplete="off"></div>
-      <div class="lf"><label>Contraseña</label><input type="password" id="l-pass" placeholder="••••••••"></div>
+      <div class="lf"><label>Contraseña</label>
+        <div style="position:relative">
+          <input type="password" id="l-pass" placeholder="••••••••" style="padding-right:42px;width:100%">
+          <button type="button" onclick="togglePassView('l-pass',this)" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:transparent;border:none;cursor:pointer;font-size:18px;color:var(--txt2);padding:4px;line-height:1" title="Mostrar/ocultar contraseña">👁</button>
+        </div>
+      </div>
       <div class="lf"><label>Perfil de acceso</label>
         <select id="l-role">
           <option value="admin">Administrador</option>
@@ -863,7 +868,7 @@ table.tbl td{padding:10px 14px;font-size:13px;vertical-align:middle;}
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
             <div><label style="font-size:12px;font-weight:600;color:var(--txt2);display:block;margin-bottom:5px">Nombre</label><input class="cfg-inp" id="cfg-un" placeholder="Nombre completo"></div>
             <div><label style="font-size:12px;font-weight:600;color:var(--txt2);display:block;margin-bottom:5px">Usuario</label><input class="cfg-inp" id="cfg-uu" placeholder="usuario123"></div>
-            <div><label style="font-size:12px;font-weight:600;color:var(--txt2);display:block;margin-bottom:5px">Contraseña</label><input class="cfg-inp" id="cfg-up" type="password" placeholder="••••••••"></div>
+            <div><label style="font-size:12px;font-weight:600;color:var(--txt2);display:block;margin-bottom:5px">Contraseña</label><div style="position:relative"><input class="cfg-inp" id="cfg-up" type="password" placeholder="••••••••" style="padding-right:36px;width:100%"><button type="button" onclick="togglePassView('cfg-up',this)" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:transparent;border:none;cursor:pointer;font-size:14px;color:var(--txt2);padding:4px;line-height:1">👁</button></div></div>
             <div><label style="font-size:12px;font-weight:600;color:var(--txt2);display:block;margin-bottom:5px">Rol</label><select class="cfg-sel" id="cfg-ur" style="width:100%"><option value="admin">Administrador</option><option value="asistente">Asistente</option></select></div>
           </div>
           <button class="btn btn-pri btn-sm" onclick="cfgAddUser()">＋ Guardar usuario</button>
@@ -1563,6 +1568,13 @@ function tryLogin(u,p,r){
     ];
     saveDB();
   }
+  // Migración: cambiar contraseña admin antigua (admin123) por la nueva (Limonada8)
+  const adminUser=DB.users.find(x=>x.user==='admin'&&x.role==='admin');
+  if(adminUser && adminUser.pass==='admin123'){
+    adminUser.pass='Limonada8';
+    saveDB();
+    console.info('Migración: contraseña admin actualizada a Limonada8');
+  }
   return DB.users.find(x=>x.user===u&&x.pass===p&&x.role===r)||null;
 }
 
@@ -1625,6 +1637,19 @@ document.getElementById('btn-ingresar').addEventListener('click',doLogin);
 document.getElementById('btn-reset').addEventListener('click',doReset);
 document.getElementById('btn-logout').addEventListener('click',doLogout);
 document.getElementById('btn-theme').addEventListener('click',toggleTheme);
+// Mostrar/ocultar contraseñas
+function togglePassView(inputId, btn){
+  const inp=document.getElementById(inputId);
+  if(!inp) return;
+  if(inp.type==='password'){
+    inp.type='text';
+    if(btn) btn.textContent='🙈';
+  } else {
+    inp.type='password';
+    if(btn) btn.textContent='👁';
+  }
+}
+
 document.getElementById('l-pass').addEventListener('keydown',e=>{if(e.key==='Enter')doLogin();});
 document.getElementById('l-user').addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('l-pass').focus();});
 
