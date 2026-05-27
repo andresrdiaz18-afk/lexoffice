@@ -1831,7 +1831,7 @@ async function iaAnalizarExp(expId){
   const pl=DB.plazos.filter(p=>p.expId===expId&&p.estado!=='cumplido');
   const au=DB.audiencias.filter(a=>a.expId===expId&&a.estado!=='cumplido');
 
-  const prompt=`Eres un asistente jurídico especializado en derecho administrativo y eclesiástico peruano. Analiza el siguiente expediente legal y proporciona un análisis conciso y práctico en español.
+  const prompt=`Eres el abogado defensor del ADMINISTRADO (no de la entidad). Analiza este expediente DESDE LA PERSPECTIVA DEL ADMINISTRADO — tu cliente es quien aparece como "Administrado", y la "Entidad" es la contraparte administrativa. Tu análisis debe evaluar qué tan favorable o desfavorable es la situación para tu cliente y qué acciones defensivas o estratégicas debe tomar.
 
 EXPEDIENTE:
 - Código: ${e.codigo}
@@ -1847,11 +1847,11 @@ ${pl.length?`- Plazos pendientes: ${pl.map(p=>`${p.descripcion} (vence ${p.venci
 ${au.length?`- Audiencias próximas: ${au.map(a=>`${a.tipo} el ${a.fecha}`).join('; ')}`:''}
 ${bit.length?`- Últimas actuaciones: ${bit.map(b=>`[${b.fecha.slice(0,10)}] ${b.tipo}: ${b.descripcion}`).join(' | ')}`:''}
 
-Proporciona:
-1. **RESUMEN EJECUTIVO** (2-3 líneas del estado actual)
-2. **PRÓXIMO PASO** (acción concreta más urgente a tomar)
-3. **RIESGOS** (qué puede pasar si no se actúa)
-4. **RECOMENDACIÓN** (estrategia sugerida)
+Proporciona DESDE LA PERSPECTIVA DEL ADMINISTRADO (tu cliente):
+1. **SITUACIÓN ACTUAL** — ¿Es favorable o desfavorable para el administrado? ¿Qué decidió la entidad y cómo le afecta?
+2. **PRÓXIMO PASO** — ¿Qué debe hacer el administrado ahora? ¿Hay plazo? ¿Debe impugnar, cumplir, esperar?
+3. **RIESGOS PARA EL ADMINISTRADO** — ¿Qué pasa si no actúa? ¿Puede perder derechos, recibir sanción, perder plazos?
+4. **ESTRATEGIA DEFENSIVA** — ¿Qué argumentos o acciones legales favorecen al administrado?
 
 Sé directo y práctico. Máximo 300 palabras en total.`;
 
@@ -1867,7 +1867,7 @@ async function iaBorradorEscrito(expId){
   const sel=await iaSeleccionarTipo(tipos,'¿Qué tipo de escrito deseas generar?');
   if(!sel) return;
 
-  const prompt=`Eres un abogado especializado en derecho administrativo peruano. Genera un borrador de ${sel} para el siguiente expediente.
+  const prompt=`Eres el abogado del ADMINISTRADO. Genera un borrador de ${sel} EN DEFENSA DEL ADMINISTRADO contra la entidad. El administrado es tu cliente y la entidad es la contraparte administrativa.
 
 DATOS DEL EXPEDIENTE:
 - Administrado: ${e.administrado}
@@ -1895,7 +1895,7 @@ async function iaResumirBitacora(expId){
   const bit=DB.bitacora.filter(b=>b.expId===expId).sort((a,b)=>a.fecha.localeCompare(b.fecha));
   if(!bit.length){ toast('Sin actuaciones en la bitácora para resumir.','in'); return; }
 
-  const prompt=`Resume cronológicamente las siguientes actuaciones del expediente "${e.codigo}" — ${e.administrado}. Proporciona un párrafo ejecutivo de máximo 150 palabras que capture el estado del caso, los hitos principales y la situación actual.
+  const prompt=`Eres el abogado del administrado. Resume cronológicamente las siguientes actuaciones del expediente desde la perspectiva defensiva del administrado "${e.codigo}" — ${e.administrado}. Proporciona un párrafo ejecutivo de máximo 150 palabras que capture el estado del caso, los hitos principales y la situación actual.
 
 ACTUACIONES:
 ${bit.map(b=>`[${b.fecha.slice(0,10)}] ${b.tipo}: ${b.descripcion}${b.docRef?' (Doc: '+b.docRef+')':''}`).join('\n')}
@@ -2640,7 +2640,7 @@ function filterExp(){
   const isAdmin = currentUser.role==='admin';
 
   let list = DB.expedientes;
-  if(q)  list=list.filter(e=>(e.nTemp||'').includes(q)||(e.codigo||'').toLowerCase().includes(q)||(e.administrado||'').toLowerCase().includes(q)||(e.numExpediente||'').toLowerCase().includes(q)||(e.asunto||'').toLowerCase().includes(q)||(e.observaciones||'').toLowerCase().includes(q));
+  if(q)  list=list.filter(e=>(e.nTemp||'').includes(q)||(e.codigo||'').toLowerCase().includes(q)||(e.administrado||'').toLowerCase().includes(q)||(e.numExpediente||'').toLowerCase().includes(q)||(e.asunto||'').toLowerCase().includes(q)||(e.observaciones||'').toLowerCase().includes(q)||(e.textoOCR||'').toLowerCase().includes(q)||(e.entidad||'').toLowerCase().includes(q)||(e.naturaleza||'').toLowerCase().includes(q));
   if(en) list=list.filter(e=>e.entidad===en);
   if(na) list=list.filter(e=>e.naturaleza===na);
   if(es) list=list.filter(e=>e.estado===es);
@@ -3432,11 +3432,11 @@ async function iaAnalizarDoc(textoDoc, modo){
   var naturalezas=getNaturalezas().join(', ');
   var prompt='';
   if(modo==='expediente'){
-    prompt='Eres un asistente legal peruano. Analiza el siguiente texto de un documento legal/administrativo y extrae campos para crear un expediente. REGLAS IMPORTANTES:\n\n1. ADMINISTRADO: Es la persona o institución que RECIBE el documento o a quien va dirigido (el destinatario, quien debe responder o actuar). NO es quien envía.\n2. ENTIDAD: Es la entidad administrativa que EMITE o ENVÍA el documento (el remitente).\n3. ASUNTO: Formato obligatorio: [Tipo de procedimiento] — [Ubicación del inmueble/bien con datos clave como CUS, partida abreviada] — [N° de expediente]. Ejemplo: \"Supervisión de actos — Chorrillos, Mz. E-4 (CUS 26319) — Exp. 092-2026/SBNSDS\". Máximo 1 línea, conciso pero informativo.\n4. PRIORIDAD: Si el documento menciona un plazo de respuesta (días hábiles), la prioridad es Alta. Si es informativo sin plazo, es Media.\n5. ESTADO: Si la entidad ya inició un procedimiento o supervisión, es \"En trámite\". Si es solo una comunicación inicial sin acción iniciada, es \"Pendiente\".\n6. OBSERVACIONES: Aquí van TODOS los detalles complementarios: número de oficio/resolución con fecha, partida registral completa, metraje, resolución que otorgó el derecho, etapa del procedimiento, plazo exacto, y cualquier dato que no encaje en otros campos.\n\nEntidades disponibles: '+entidades+'\nNaturalezas disponibles: '+naturalezas+'\n\nResponde SOLO en JSON válido, sin backticks ni texto adicional:\n{\"administrado\":\"destinatario del documento\",\"entidad\":\"entidad emisora (la más cercana de la lista)\",\"naturaleza\":\"tipo de proceso (la más cercana de la lista)\",\"asunto\":\"[Tipo] — [Inmueble/bien con datos clave] — [Exp. N°]\",\"numExpediente\":\"número de expediente\",\"estado\":\"Pendiente o En trámite\",\"prioridad\":\"Alta, Media o Baja\",\"observaciones\":\"todos los detalles complementarios\"}\n\nTEXTO DEL DOCUMENTO:\n'+textoDoc;
+    prompt='Eres un asistente legal peruano. Analiza el siguiente texto de un documento legal/administrativo y extrae campos para crear un expediente. REGLAS IMPORTANTES:\n\n1. ADMINISTRADO: Es la persona o institución que RECIBE el documento o a quien va dirigido (el destinatario, quien debe responder o actuar). NO es quien envía.\n2. ENTIDAD: Es la entidad administrativa que EMITE o ENVÍA el documento (el remitente).\n3. ASUNTO: Formato obligatorio: [Tipo de procedimiento] — [Ubicación del inmueble/bien con datos clave como CUS, partida abreviada] — [N° de expediente]. Ejemplo: \"Supervisión de actos — Chorrillos, Mz. E-4 (CUS 26319) — Exp. 092-2026/SBNSDS\". Máximo 1 línea, conciso pero informativo.\n4. PRIORIDAD: Si el documento menciona un plazo de respuesta (días hábiles), la prioridad es Alta. Si es informativo sin plazo, es Media.\n5. ESTADO: Si la entidad ya inició un procedimiento o supervisión, es \"En trámite\". Si es solo una comunicación inicial sin acción iniciada, es \"Pendiente\".\n6. OBSERVACIONES: Estructura OBLIGATORIA en este orden:\n   a) PARTE RESOLUTIVA primero: qué se resolvió, qué se ordenó, qué efecto tiene para el administrado (favorable/desfavorable/neutro).\n   b) Datos clave: número de resolución/oficio con fecha, norma aplicada, plazo si existe.\n   c) Solo si es relevante: 1-2 líneas de antecedentes esenciales.\n   NO incluir cronología de notificaciones ni repetir considerandos. Máximo 5 líneas.\n\nEntidades disponibles: '+entidades+'\nNaturalezas disponibles: '+naturalezas+'\n\nResponde SOLO en JSON válido, sin backticks ni texto adicional:\n{\"administrado\":\"destinatario del documento\",\"entidad\":\"entidad emisora (la más cercana de la lista)\",\"naturaleza\":\"tipo de proceso (la más cercana de la lista)\",\"asunto\":\"[Tipo] — [Inmueble/bien con datos clave] — [Exp. N°]\",\"numExpediente\":\"número de expediente\",\"estado\":\"Pendiente o En trámite\",\"prioridad\":\"Alta, Media o Baja\",\"observaciones\":\"todos los detalles complementarios\"}\n\nTEXTO DEL DOCUMENTO:\n'+textoDoc;
   } else if(modo==='actuacion'){
-    prompt='Eres un asistente legal peruano. Analiza el siguiente texto de un documento legal/administrativo y extrae campos para registrar una actuación procesal. REGLAS:\n1. TIPO: Clasifica como Oficio, Resolución, Notificación, Auto, Sentencia, Requerimiento, Carta, Memorando, etc.\n2. DESCRIPCION: Formato: [Qué ordena/comunica] — [Inmueble/bien si aplica] — [Datos clave]. Conciso pero completo.\n3. DOCREF: Número completo del documento (ej: Oficio N° 00458-2026/SBN-DGPE-SDS).\n4. PLAZO: Si menciona días hábiles para responder, extraer el número exacto.\n5. ESTADO HITO: Si acaba de llegar y hay que responder = \"notificado\". Si ya se respondió = \"respondido\". Si hay resolución final = \"resuelto\".\n\nResponde SOLO en JSON válido, sin backticks:\n{\"tipo\":\"tipo de documento\",\"descripcion\":\"resumen conciso\",\"docRef\":\"número completo del documento\",\"fecNotif\":\"fecha en formato YYYY-MM-DD\",\"medioNotif\":\"Casilla electrónica, Física, Correo electrónico, Notarial o SINOE\",\"plazoDias\":\"número de días hábiles\",\"estadoHito\":\"notificado, respondido o resuelto\",\"resultado\":\"resultado o decisión si aparece\"}\n\nTEXTO DEL DOCUMENTO:\n'+textoDoc;
+    prompt='Eres un asistente legal peruano. Analiza el siguiente texto de un documento legal/administrativo y extrae campos para registrar una actuación procesal. REGLAS:\n1. TIPO: Clasifica como Oficio, Resolución, Notificación, Auto, Sentencia, Requerimiento, Carta, Memorando, etc.\n2. DESCRIPCION: PRIMERO qué se resuelve/ordena (la parte dispositiva), LUEGO el efecto para el administrado (favorable/desfavorable), LUEGO datos del bien si aplica. Máximo 3 líneas.\n3. DOCREF: Número completo del documento (ej: Oficio N° 00458-2026/SBN-DGPE-SDS).\n4. PLAZO: Si menciona días hábiles para responder, extraer el número exacto.\n5. ESTADO HITO: Si acaba de llegar y hay que responder = \"notificado\". Si ya se respondió = \"respondido\". Si hay resolución final = \"resuelto\".\n\nResponde SOLO en JSON válido, sin backticks:\n{\"tipo\":\"tipo de documento\",\"descripcion\":\"resumen conciso\",\"docRef\":\"número completo del documento\",\"fecNotif\":\"fecha en formato YYYY-MM-DD\",\"medioNotif\":\"Casilla electrónica, Física, Correo electrónico, Notarial o SINOE\",\"plazoDias\":\"número de días hábiles\",\"estadoHito\":\"notificado, respondido o resuelto\",\"resultado\":\"resultado o decisión si aparece\"}\n\nTEXTO DEL DOCUMENTO:\n'+textoDoc;
   } else if(modo==='bandeja'){
-    prompt='Eres un asistente legal peruano. Analiza el siguiente texto de un documento recibido y extrae campos para registrarlo en bandeja de entrada. REGLAS:\n1. TIPO: Clasifica como Carta, Notificación, Oficio, Memorando, Informe, Resolución, Auto, Sentencia, Requerimiento u Otro.\n2. REMITENTE: Entidad o persona que ENVÍA el documento (no el destinatario).\n3. ASUNTO: Formato: [Tipo de trámite] — [Inmueble/bien si aplica con datos clave] — [N° expediente si existe]. Máximo 1 línea.\n4. OBSERVACIONES: Número del documento con fecha, plazo de respuesta si existe, acciones requeridas, datos complementarios.\n\nResponde SOLO en JSON válido, sin backticks:\n{\"tipo\":\"tipo de documento\",\"remitente\":\"entidad o persona que envía\",\"asunto\":\"[Tipo] — [Bien/inmueble] — [Exp.]\",\"observaciones\":\"número de documento, fecha, plazo, acciones requeridas\"}\n\nTEXTO DEL DOCUMENTO:\n'+textoDoc;
+    prompt='Eres un asistente legal peruano. Analiza el siguiente texto de un documento recibido y extrae campos para registrarlo en bandeja de entrada. REGLAS:\n1. TIPO: Clasifica como Carta, Notificación, Oficio, Memorando, Informe, Resolución, Auto, Sentencia, Requerimiento u Otro.\n2. REMITENTE: Entidad o persona que ENVÍA el documento (no el destinatario).\n3. ASUNTO: Formato: [Tipo de trámite] — [Inmueble/bien si aplica con datos clave] — [N° expediente si existe]. Máximo 1 línea.\n4. OBSERVACIONES: PRIMERO: qué se resuelve o qué acción requiere del administrado. LUEGO: número del documento con fecha, plazo de respuesta si existe. NO incluir cronología de antecedentes.\n\nResponde SOLO en JSON válido, sin backticks:\n{\"tipo\":\"tipo de documento\",\"remitente\":\"entidad o persona que envía\",\"asunto\":\"[Tipo] — [Bien/inmueble] — [Exp.]\",\"observaciones\":\"número de documento, fecha, plazo, acciones requeridas\"}\n\nTEXTO DEL DOCUMENTO:\n'+textoDoc;
   }
   var modelos=['gemini-2.5-flash-lite','gemini-2.0-flash'];
   var errorUltimo='';
@@ -5228,7 +5228,7 @@ filterExp=function(){
   const pr=document.getElementById('sp')?.value||'';
   const isAdmin=currentUser.role==='admin';
   let list=DB.expedientes;
-  if(q)list=list.filter(e=>(e.nTemp||'').includes(q)||(e.codigo||'').toLowerCase().includes(q)||(e.administrado||'').toLowerCase().includes(q)||(e.numExpediente||'').toLowerCase().includes(q)||(e.asunto||'').toLowerCase().includes(q)||(e.observaciones||'').toLowerCase().includes(q));
+  if(q)list=list.filter(e=>(e.nTemp||'').includes(q)||(e.codigo||'').toLowerCase().includes(q)||(e.administrado||'').toLowerCase().includes(q)||(e.numExpediente||'').toLowerCase().includes(q)||(e.asunto||'').toLowerCase().includes(q)||(e.observaciones||'').toLowerCase().includes(q)||(e.textoOCR||'').toLowerCase().includes(q)||(e.entidad||'').toLowerCase().includes(q)||(e.naturaleza||'').toLowerCase().includes(q));
   if(en)list=list.filter(e=>e.entidad===en);
   if(na)list=list.filter(e=>e.naturaleza===na);
   if(es)list=list.filter(e=>e.estado===es);
