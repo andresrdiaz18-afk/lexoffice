@@ -917,14 +917,14 @@ table.tbl td{padding:10px 14px;font-size:13px;vertical-align:middle;}
         <div class="cfg-sec">
           <div class="cfg-sec-tit">Configuración de Inteligencia Artificial</div>
           <div style="font-size:12px;color:var(--txt3);margin-bottom:16px;line-height:1.6">
-            LexOffice utiliza <strong>DeepSeek</strong> para analizar expedientes y generar borradores de escritos.
-            Obtén tu API key en <a href="https://platform.deepseek.com" target="_blank" style="color:var(--acc)">platform.deepseek.com</a> → API Keys → Create API Key.
+            LexOffice utiliza <strong>Google Gemini</strong> para analizar expedientes y generar borradores de escritos.
+            Obtén tu API key gratuita en <a href="https://aistudio.google.com" target="_blank" style="color:var(--acc)">aistudio.google.com</a> → Get API key.
           </div>
           <div class="cfg-row">
-            <div><div class="cfg-row-lbl">API Key de DeepSeek</div><div class="cfg-row-sub">Se guarda solo en tu navegador, nunca en el archivo</div></div>
+            <div><div class="cfg-row-lbl">API Key de Gemini</div><div class="cfg-row-sub">Se guarda solo en tu navegador, nunca en el archivo</div></div>
           </div>
           <div style="display:flex;gap:8px;margin-top:8px">
-            <input class="cfg-inp" id="cfg-ia-key" type="password" placeholder="sk-…" style="flex:1">
+            <input class="cfg-inp" id="cfg-ia-key" type="password" placeholder="AIzaSy…" style="flex:1">
             <button class="btn btn-sec btn-sm" id="cfg-ia-toggle" onclick="iaToggleVer()" title="Mostrar/ocultar">👁</button>
           </div>
           <div style="display:flex;gap:8px;margin-top:10px">
@@ -944,7 +944,7 @@ table.tbl td{padding:10px 14px;font-size:13px;vertical-align:middle;}
         <div class="cfg-sec">
           <div class="cfg-sec-tit">Costo estimado</div>
           <div class="ic">
-            <div class="ic-row"><span class="ic-k">Modelo usado</span><span class="ic-v">DeepSeek Chat (deepseek-chat)</span></div>
+            <div class="ic-row"><span class="ic-k">Modelo usado</span><span class="ic-v">Gemini 2.5 Flash Lite (con fallback)</span></div>
             <div class="ic-row"><span class="ic-k">Costo</span><span class="ic-v" style="color:var(--grn)">Gratuito (límite generoso diario)</span></div>
             <div class="ic-row"><span class="ic-k">Tarjeta requerida</span><span class="ic-v" style="color:var(--grn)">No</span></div>
           </div>
@@ -1165,7 +1165,7 @@ const OD_REDIRECT  = 'https://andresrdiaz18-afk.github.io/lexoffice/';
 const OD_SCOPES    = 'Files.ReadWrite';
 const OD_FILE      = '/me/drive/root:/LexOffice/lexoffice_backup.json:/content';
 const OD_TOKEN_KEY = 'lxo_od_token';
-const OD_SYNC_DELAY= 4000; // ms después de saveDB para sincronizar
+const OD_SYNC_DELAY= 1000; // ms después de saveDB para sincronizar
 
 let _odToken = null;
 let _odSyncTimer = null;
@@ -1259,7 +1259,19 @@ async function odExchangeCode(code){
       if(data.refresh_token) localStorage.setItem('lxo_od_refresh',data.refresh_token);
       sessionStorage.removeItem('lxo_od_verifier');
       toast('✅ OneDrive conectado correctamente','ok');
-      odSyncUp();
+      // PRIMERO descargar, LUEGO subir — no sobrescribir datos remotos
+      var remoto=await odSyncDown();
+      if(remoto && remoto.expedientes && remoto.expedientes.length > DB.expedientes.length){
+        DB=remoto;
+        if(!Array.isArray(DB.bitacora)) DB.bitacora=[];
+        if(!Array.isArray(DB.historial)) DB.historial=[];
+        if(!Array.isArray(DB.bandeja)) DB.bandeja=[];
+        idbPut(IDB_KEY_DB,DB).catch(function(){});
+        toast('☁️ '+remoto.expedientes.length+' expedientes cargados desde OneDrive','ok');
+        navigate(currentPage);
+      } else {
+        odSyncUp();
+      }
       odUpdateUI();
     } else {
       console.error('Token exchange falló:',data);
@@ -1355,23 +1367,32 @@ async function odSyncUp(){
 
 // ── Descargar backup desde OneDrive ──
 async function odSyncDown(){
-  const token=odGetToken();
-  if(!token) return null;
+  var token=odGetToken();
+  if(!token){ console.warn('odSyncDown: sin token'); return null; }
   try{
-    const res=await fetch(`https://graph.microsoft.com/v1.0${OD_FILE}`,{
-      headers:{'Authorization':`Bearer ${token}`}
-    });
-    if(res.status===404) return null; // primera vez, no hay backup aún
-    if(res.status===401){
-      const refreshed=await odRefreshToken();
+    // Paso 1: obtener metadata del archivo
+    var metaUrl='https://graph.microsoft.com/v1.0/me/drive/root:/LexOffice/lexoffice_backup.json';
+    var metaRes=await fetch(metaUrl,{headers:{'Authorization':'Bearer '+token}});
+    if(metaRes.status===404){ console.warn('odSyncDown: archivo no existe en OneDrive'); return null; }
+    if(metaRes.status===401){
+      var refreshed=await odRefreshToken();
       if(refreshed) return odSyncDown();
       odClearToken(); return null;
     }
-    if(!res.ok) return null;
-    const data=await res.json();
+    if(!metaRes.ok){ console.warn('odSyncDown: error metadata HTTP',metaRes.status); return null; }
+    var meta=await metaRes.json();
+    var downloadUrl=meta['@microsoft.graph.downloadUrl'];
+    if(!downloadUrl){ console.warn('odSyncDown: no hay downloadUrl'); return null; }
+    // Paso 2: descargar contenido real (con cache-buster)
+    var fileRes=await fetch(downloadUrl+'&nocache='+Date.now());
+    if(!fileRes.ok){ console.warn('odSyncDown: error descarga HTTP',fileRes.status); return null; }
+    var txt=await fileRes.text();
+    var data=JSON.parse(txt);
+    console.info('odSyncDown: descargado,',data?.DB?.expedientes?.length||0,'expedientes');
     if(data?.DB?.expedientes) return data.DB;
+    console.warn('odSyncDown: JSON válido pero sin DB.expedientes');
     return null;
-  }catch(e){ console.warn('OneDrive download error:',e); return null; }
+  }catch(e){ console.error('odSyncDown error:',e); return null; }
 }
 
 // ── Sincronización diferida (no bloquea cada keystroke) ──
@@ -1730,7 +1751,7 @@ function swTab(id,el){
 }
 
 // ══════════════════════════════════════════════
-// MÓDULO DE IA — DeepSeek
+// MÓDULO DE IA — Google Gemini
 // ══════════════════════════════════════════════
 const IA_KEY_STORE = 'lxo_ia_key'; // localStorage — nunca en el archivo
 
@@ -1740,14 +1761,14 @@ function iaHasKey(){ return !!iaGetKey(); }
 function iaGuardarKey(){
   const v=(document.getElementById('cfg-ia-key')?.value||'').trim();
   if(!v){ toast('Ingresa la API key primero.','er'); return; }
-  if(!v.startsWith('sk-')){ toast('La API key de DeepSeek debe comenzar con "sk-"','er'); return; }
+  if(!v.startsWith('AIza')){ toast('La key de Gemini debe comenzar con "AIza…"','er'); return; }
   localStorage.setItem(IA_KEY_STORE, v);
   iaActualizarEstado();
   toast('API key guardada correctamente.','ok');
 }
 
 function iaBorrarKey(){
-  if(!confirm('¿Eliminar la API key de DeepSeek?')) return;
+  if(!confirm('¿Eliminar la API key de Gemini?')) return;
   localStorage.removeItem(IA_KEY_STORE);
   const inp=document.getElementById('cfg-ia-key');
   if(inp) inp.value='';
@@ -1779,41 +1800,28 @@ function iaActualizarEstado(){
 async function iaLlamar(prompt){
   const key=iaGetKey();
   if(!key) throw new Error('Sin API key. Configúrala en Configuración → 🤖 IA');
-
-  const url='https://api.deepseek.com/chat/completions';
-  const body={
-    model:'deepseek-chat',
-    max_tokens:1500,
-    messages:[{role:'user',content:prompt}]
-  };
-
-  try{
-    const res=await fetch(url,{
-      method:'POST',
-      headers:{
-        'Content-Type':'application/json',
-        'Authorization':`Bearer ${key}`
-      },
-      body:JSON.stringify(body)
-    });
-    if(!res.ok){
-      const err=await res.json().catch(()=>({}));
-      const msg=err?.error?.message||`Error HTTP ${res.status}`;
-      if(res.status===401) throw new Error('API key inválida. Verifica tu key en Configuración → 🤖 IA');
-      if(res.status===429) throw new Error('Límite de uso alcanzado. Espera unos minutos e intenta de nuevo.');
-      if(res.status===500||res.status===503) throw new Error('Servicio temporalmente no disponible. Intenta en unos momentos.');
-      throw new Error(msg);
+  var modelos=['gemini-2.5-flash-lite','gemini-2.0-flash'];
+  var ultimoError='';
+  for(var m=0;m<modelos.length;m++){
+    var modelo=modelos[m];
+    var url='https://generativelanguage.googleapis.com/v1beta/models/'+modelo+':generateContent?key='+key;
+    var body={contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:0.3,maxOutputTokens:1500}};
+    try{
+      var res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      if(res.status===404||res.status===400||res.status===429||res.status===503){
+        var err=await res.json().catch(function(){return {};});
+        ultimoError=err?.error?.message||'Modelo '+modelo+' no disponible';
+        continue;
+      }
+      if(!res.ok){var err=await res.json().catch(function(){return {};});throw new Error(err?.error?.message||'Error HTTP '+res.status);}
+      var data=await res.json();
+      return data?.candidates?.[0]?.content?.parts?.[0]?.text||'Sin respuesta.';
+    }catch(e){
+      if(e.message.includes('fetch')||e.message.includes('network')) throw new Error('Sin conexión a internet.');
+      ultimoError=e.message;
     }
-    const data=await res.json();
-    const texto=data?.choices?.[0]?.message?.content||'Sin respuesta.';
-    console.info('IA: respuesta recibida de DeepSeek Chat');
-    return texto;
-  }catch(e){
-    if(e.message.includes('Failed to fetch')||e.message.includes('NetworkError')||e.message.includes('network')){
-      throw new Error('Sin conexión a internet. Verifica tu red e inténtalo de nuevo.');
-    }
-    throw e;
   }
+  throw new Error('Ningún modelo disponible: '+ultimoError);
 }
 
 // ── Análisis de expediente ──
@@ -1975,7 +1983,7 @@ function iaGuardarBitacora(expId){
     fecha:new Date().toISOString(),
     tipo:'Borrador generado por IA',
     descripcion:window._iaUltimoTexto.substring(0,500)+(window._iaUltimoTexto.length>500?'…':''),
-    docRef:'Generado automáticamente con DeepSeek Chat',
+    docRef:'Generado automáticamente con Gemini Flash',
     usuario:currentUser?.name||'—'
   });
   const i=DB.expedientes.findIndex(x=>x.id===expId);
@@ -2899,7 +2907,8 @@ function formExp(e={}, esNuevo=false){
 
 function modalNewExp(){
   moOpen('Nuevo Expediente', formExp({}, true),
-    `<button class="btn btn-sec" onclick="moClose()">Cancelar</button>
+    `<button class="btn btn-sec" onclick="iaAutoLlenarModal('expediente')" style="margin-right:auto;border-color:var(--acc);color:var(--acc)">📄 Autollenar con IA</button>
+     <button class="btn btn-sec" onclick="moClose()">Cancelar</button>
      <button class="btn btn-pri" onclick="saveExp()">Guardar expediente</button>`);
 }
 function modalEditExp(id){
@@ -2993,6 +3002,8 @@ function saveExp(id=null){
     vinculos: document.getElementById('fvi').value.trim(),
     actualizado: hoy(),
   };
+  // Metadato OCR para indexación de búsqueda
+  if(window._iaLastOCR){ obj.textoOCR=window._iaLastOCR; window._iaLastOCR=''; }
   if(id){
     const i=DB.expedientes.findIndex(x=>x.id===id);
     const antes=DB.expedientes[i];
@@ -3372,6 +3383,210 @@ function delPlazo(id){if(!confirm('¿Eliminar?'))return;DB.plazos=DB.plazos.filt
 window._docFiltroExpId = '';
 function docFiltrarExp(expId){ window._docFiltroExpId=expId||''; renderDocs(); }
 
+// ═══════════════════════════════════════════════════
+// IA AUTOLLENADO — lectura de imagen y llenado automático (multipágina + cámara)
+// ═══════════════════════════════════════════════════
+
+function fileToBase64(file){
+  return new Promise(function(res,rej){
+    var r=new FileReader();
+    r.onload=function(){res(r.result);};
+    r.onerror=function(){rej(new Error('Error leyendo archivo'));};
+    r.readAsDataURL(file);
+  });
+}
+
+async function iaExtraerTexto(file){
+  var key=iaGetKey();
+  if(!key) throw new Error('Configura tu API key en Configuración → 🤖 IA');
+  var b64=await fileToBase64(file);
+  var rawB64=b64.split(',')[1];
+  var mimeType=file.type;
+  if(!mimeType.startsWith('image/')){
+    throw new Error('Sube una imagen (JPG, PNG). Para PDFs, toma una captura de pantalla.');
+  }
+  var modelos=['gemini-2.5-flash-lite','gemini-2.0-flash'];
+  var errorUltimo='';
+  for(var m=0;m<modelos.length;m++){
+    try{
+      var url='https://generativelanguage.googleapis.com/v1beta/models/'+modelos[m]+':generateContent?key='+key;
+      var body={contents:[{parts:[{inline_data:{mime_type:mimeType,data:rawB64}},{text:'Transcribe TODO el texto visible en esta imagen de documento legal/administrativo peruano. Incluye números de expediente, fechas, nombres, entidades, resoluciones. Sé exhaustivo.'}]}],generationConfig:{temperature:0.1,maxOutputTokens:2000}};
+      var res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      var data=await res.json();
+      if(data?.error){errorUltimo=data.error.message;continue;}
+      var texto=(data?.candidates?.[0]?.content?.parts?.[0]?.text||'').trim();
+      if(texto) return texto;
+    }catch(e){errorUltimo=e.message;}
+  }
+  throw new Error('No se pudo leer la imagen: '+errorUltimo);
+}
+
+async function iaAnalizarDoc(textoDoc, modo){
+  var key=iaGetKey();
+  if(!key) throw new Error('Configura tu API key en Configuración → 🤖 IA');
+  var entidades=getEntidades().join(', ');
+  var naturalezas=getNaturalezas().join(', ');
+  var prompt='';
+  if(modo==='expediente'){
+    prompt='Eres un asistente legal peruano. Analiza el siguiente texto de un documento legal/administrativo y extrae campos para crear un expediente. REGLAS IMPORTANTES:\n\n1. ADMINISTRADO: Es la persona o institución que RECIBE el documento o a quien va dirigido (el destinatario, quien debe responder o actuar). NO es quien envía.\n2. ENTIDAD: Es la entidad administrativa que EMITE o ENVÍA el documento (el remitente).\n3. ASUNTO: Formato obligatorio: [Tipo de procedimiento] — [Ubicación del inmueble/bien con datos clave como CUS, partida abreviada] — [N° de expediente]. Ejemplo: \"Supervisión de actos — Chorrillos, Mz. E-4 (CUS 26319) — Exp. 092-2026/SBNSDS\". Máximo 1 línea, conciso pero informativo.\n4. PRIORIDAD: Si el documento menciona un plazo de respuesta (días hábiles), la prioridad es Alta. Si es informativo sin plazo, es Media.\n5. ESTADO: Si la entidad ya inició un procedimiento o supervisión, es \"En trámite\". Si es solo una comunicación inicial sin acción iniciada, es \"Pendiente\".\n6. OBSERVACIONES: Aquí van TODOS los detalles complementarios: número de oficio/resolución con fecha, partida registral completa, metraje, resolución que otorgó el derecho, etapa del procedimiento, plazo exacto, y cualquier dato que no encaje en otros campos.\n\nEntidades disponibles: '+entidades+'\nNaturalezas disponibles: '+naturalezas+'\n\nResponde SOLO en JSON válido, sin backticks ni texto adicional:\n{\"administrado\":\"destinatario del documento\",\"entidad\":\"entidad emisora (la más cercana de la lista)\",\"naturaleza\":\"tipo de proceso (la más cercana de la lista)\",\"asunto\":\"[Tipo] — [Inmueble/bien con datos clave] — [Exp. N°]\",\"numExpediente\":\"número de expediente\",\"estado\":\"Pendiente o En trámite\",\"prioridad\":\"Alta, Media o Baja\",\"observaciones\":\"todos los detalles complementarios\"}\n\nTEXTO DEL DOCUMENTO:\n'+textoDoc;
+  } else if(modo==='actuacion'){
+    prompt='Eres un asistente legal peruano. Analiza el siguiente texto de un documento legal/administrativo y extrae campos para registrar una actuación procesal. REGLAS:\n1. TIPO: Clasifica como Oficio, Resolución, Notificación, Auto, Sentencia, Requerimiento, Carta, Memorando, etc.\n2. DESCRIPCION: Formato: [Qué ordena/comunica] — [Inmueble/bien si aplica] — [Datos clave]. Conciso pero completo.\n3. DOCREF: Número completo del documento (ej: Oficio N° 00458-2026/SBN-DGPE-SDS).\n4. PLAZO: Si menciona días hábiles para responder, extraer el número exacto.\n5. ESTADO HITO: Si acaba de llegar y hay que responder = \"notificado\". Si ya se respondió = \"respondido\". Si hay resolución final = \"resuelto\".\n\nResponde SOLO en JSON válido, sin backticks:\n{\"tipo\":\"tipo de documento\",\"descripcion\":\"resumen conciso\",\"docRef\":\"número completo del documento\",\"fecNotif\":\"fecha en formato YYYY-MM-DD\",\"medioNotif\":\"Casilla electrónica, Física, Correo electrónico, Notarial o SINOE\",\"plazoDias\":\"número de días hábiles\",\"estadoHito\":\"notificado, respondido o resuelto\",\"resultado\":\"resultado o decisión si aparece\"}\n\nTEXTO DEL DOCUMENTO:\n'+textoDoc;
+  } else if(modo==='bandeja'){
+    prompt='Eres un asistente legal peruano. Analiza el siguiente texto de un documento recibido y extrae campos para registrarlo en bandeja de entrada. REGLAS:\n1. TIPO: Clasifica como Carta, Notificación, Oficio, Memorando, Informe, Resolución, Auto, Sentencia, Requerimiento u Otro.\n2. REMITENTE: Entidad o persona que ENVÍA el documento (no el destinatario).\n3. ASUNTO: Formato: [Tipo de trámite] — [Inmueble/bien si aplica con datos clave] — [N° expediente si existe]. Máximo 1 línea.\n4. OBSERVACIONES: Número del documento con fecha, plazo de respuesta si existe, acciones requeridas, datos complementarios.\n\nResponde SOLO en JSON válido, sin backticks:\n{\"tipo\":\"tipo de documento\",\"remitente\":\"entidad o persona que envía\",\"asunto\":\"[Tipo] — [Bien/inmueble] — [Exp.]\",\"observaciones\":\"número de documento, fecha, plazo, acciones requeridas\"}\n\nTEXTO DEL DOCUMENTO:\n'+textoDoc;
+  }
+  var modelos=['gemini-2.5-flash-lite','gemini-2.0-flash'];
+  var errorUltimo='';
+  var txt='';
+  for(var m=0;m<modelos.length;m++){
+    try{
+      var url='https://generativelanguage.googleapis.com/v1beta/models/'+modelos[m]+':generateContent?key='+key;
+      var body={contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:0.2,maxOutputTokens:800}};
+      var res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      var data=await res.json();
+      if(data?.error){errorUltimo=data.error.message;continue;}
+      txt=(data?.candidates?.[0]?.content?.parts?.[0]?.text||'').trim();
+      if(txt) break;
+    }catch(e){errorUltimo=e.message;}
+  }
+  if(!txt) throw new Error('La IA no respondió: '+errorUltimo);
+  try{
+    var clean=txt.replace(/^```json?\n?/,'').replace(/\n?```$/,'').trim();
+    return JSON.parse(clean);
+  }catch(e){
+    console.warn('IA devolvió JSON inválido:',txt);
+    throw new Error('La IA no devolvió datos válidos. Intenta con una imagen más clara.');
+  }
+}
+
+// ── Interfaz de captura multipágina + cámara ──
+window._iaPages = [];
+
+function iaAutoLlenarModal(modo){
+  window._iaPages = [];
+  window._iaModo = modo;
+  var overlay=document.createElement('div');
+  overlay.id='ia-capture-overlay';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.innerHTML='<div style="background:var(--sur);border-radius:18px;padding:24px;max-width:340px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.5)">'
+    +'<div style="font-size:15px;font-weight:600;color:var(--txt);margin-bottom:6px">📄 Autollenar con IA</div>'
+    +'<div style="font-size:12px;color:var(--txt2);margin-bottom:16px">Puedes agregar varias páginas del mismo documento antes de analizar.</div>'
+    +'<div id="ia-pages-list" style="margin-bottom:14px;display:flex;flex-wrap:wrap;gap:8px"></div>'
+    +'<div style="display:flex;gap:8px;margin-bottom:14px">'
+    +'<button onclick="iaCapturarImagen(\'camera\')" style="flex:1;padding:10px;border-radius:10px;border:1.5px solid var(--acc);background:transparent;color:var(--acc);font-size:13px;cursor:pointer">📷 Cámara</button>'
+    +'<button onclick="iaCapturarImagen(\'gallery\')" style="flex:1;padding:10px;border-radius:10px;border:1.5px solid var(--brd);background:transparent;color:var(--txt);font-size:13px;cursor:pointer">🖼 Galería</button>'
+    +'</div>'
+    +'<div style="display:flex;gap:8px">'
+    +'<button onclick="iaCerrarCaptura()" style="flex:1;padding:10px;border-radius:10px;border:1px solid var(--brd);background:transparent;color:var(--txt2);font-size:13px;cursor:pointer">Cancelar</button>'
+    +'<button id="ia-analizar-btn" onclick="iaAnalizarPaginas()" style="flex:1;padding:10px;border-radius:10px;background:var(--acc);color:#fff;font-size:13px;cursor:pointer;border:none;opacity:.4;pointer-events:none">Analizar</button>'
+    +'</div></div>';
+  document.body.appendChild(overlay);
+}
+
+function iaCapturarImagen(fuente){
+  var input=document.createElement('input');
+  input.type='file';
+  input.accept='image/*';
+  if(fuente==='camera') input.capture='environment';
+  if(fuente==='gallery') input.multiple=true;
+  input.onchange=function(){
+    if(!input.files||!input.files.length) return;
+    Array.from(input.files).forEach(function(file){
+      var reader=new FileReader();
+      reader.onload=function(e){
+        window._iaPages.push({file:file, b64:e.target.result});
+        iaActualizarPreview();
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+  input.click();
+}
+
+function iaActualizarPreview(){
+  var lista=document.getElementById('ia-pages-list');
+  var btn=document.getElementById('ia-analizar-btn');
+  if(!lista) return;
+  lista.innerHTML=window._iaPages.map(function(p,i){
+    return '<div style="position:relative;display:inline-block">'
+      +'<img src="'+p.b64+'" style="width:56px;height:72px;object-fit:cover;border-radius:6px;border:2px solid var(--acc)">'
+      +'<button onclick="iaEliminarPagina('+i+')" style="position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;background:var(--red);color:#fff;border:none;font-size:10px;cursor:pointer;line-height:18px;padding:0">✕</button>'
+      +'<div style="font-size:9px;text-align:center;color:var(--txt2);margin-top:2px">Pág '+(i+1)+'</div></div>';
+  }).join('');
+  if(btn){
+    btn.style.opacity=window._iaPages.length>0?'1':'0.4';
+    btn.style.pointerEvents=window._iaPages.length>0?'auto':'none';
+    btn.textContent='Analizar ('+window._iaPages.length+' pág'+(window._iaPages.length>1?'s':'')+')';
+  }
+}
+
+function iaEliminarPagina(idx){
+  window._iaPages.splice(idx,1);
+  iaActualizarPreview();
+}
+
+function iaCerrarCaptura(){
+  var el=document.getElementById('ia-capture-overlay');
+  if(el) el.remove();
+  window._iaPages=[];
+}
+
+async function iaAnalizarPaginas(){
+  if(!window._iaPages||!window._iaPages.length) return;
+  var modo=window._iaModo;
+  var btn=document.getElementById('ia-analizar-btn');
+  if(btn){btn.textContent='⏳ Procesando…';btn.style.pointerEvents='none';}
+  try{
+    toast('🔍 Leyendo '+window._iaPages.length+' página(s) con IA…','in');
+    var textos=[];
+    for(var i=0;i<window._iaPages.length;i++){
+      var texto=await iaExtraerTexto(window._iaPages[i].file);
+      if(texto) textos.push('--- Página '+(i+1)+' ---\n'+texto);
+    }
+    var textoCompleto=textos.join('\n\n');
+    if(!textoCompleto) throw new Error('No se pudo extraer texto de las imágenes');
+    toast('🧠 Analizando contenido…','in');
+    var campos=await iaAnalizarDoc(textoCompleto, modo);
+    iaCerrarCaptura();
+    // Guardar texto OCR como metadato oculto para búsqueda indexada
+    window._iaLastOCR = textoCompleto;
+    iaRellenarCampos(campos, modo);
+    toast('✅ Campos autocompletados. Revisa y ajusta.','ok');
+  }catch(e){
+    toast('Error: '+e.message,'er');
+    console.error('iaAnalizarPaginas:',e);
+    if(btn){btn.textContent='Analizar';btn.style.pointerEvents='auto';}
+  }
+}
+
+function iaRellenarCampos(c, modo){
+  if(modo==='expediente'){
+    if(c.administrado){var el=document.getElementById('fad');if(el)el.value=c.administrado;}
+    if(c.asunto){var el=document.getElementById('fas');if(el)el.value=c.asunto;}
+    if(c.numExpediente){var el=document.getElementById('fnx');if(el)el.value=c.numExpediente;}
+    if(c.observaciones){var el=document.getElementById('fob');if(el)el.value=c.observaciones;}
+    if(c.entidad){var el=document.getElementById('fen');if(el){el.value=c.entidad;autoFillCodigo();}}
+    if(c.naturaleza){var el=document.getElementById('fna');if(el){el.value=c.naturaleza;autoFillCodigo();}}
+    if(c.estado){var el=document.getElementById('fes');if(el)el.value=c.estado;}
+    if(c.prioridad){var el=document.getElementById('fpr');if(el)el.value=c.prioridad;}
+  } else if(modo==='actuacion'){
+    if(c.tipo){var el=document.getElementById('nr-tipo');if(el)el.value=c.tipo;}
+    if(c.descripcion){var el=document.getElementById('nr-desc');if(el)el.value=c.descripcion;}
+    if(c.docRef){var el=document.getElementById('nr-docref');if(el)el.value=c.docRef;}
+    if(c.fecNotif){var el=document.getElementById('nr-fec-notif');if(el)el.value=c.fecNotif;}
+    if(c.medioNotif){var el=document.getElementById('nr-medio-notif');if(el)el.value=c.medioNotif;}
+    if(c.plazoDias){var el=document.getElementById('nr-plazo-dias');if(el)el.value=c.plazoDias;}
+    if(c.estadoHito){var el=document.getElementById('nr-estado-hito');if(el)el.value=c.estadoHito;}
+    if(c.resultado){var el=document.getElementById('nr-resultado');if(el)el.value=c.resultado;}
+    var sel=document.getElementById('nr-tipo-reg');
+    if(sel){sel.value='documento';docToggleTipoReg('documento');}
+  } else if(modo==='bandeja'){
+    if(c.tipo){var el=document.getElementById('bj-ftipo');if(el)el.value=c.tipo;}
+    if(c.remitente){var el=document.getElementById('bj-fremitente');if(el)el.value=c.remitente;}
+    if(c.asunto){var el=document.getElementById('bj-fasunto');if(el)el.value=c.asunto;}
+    if(c.observaciones){var el=document.getElementById('bj-fobs');if(el)el.value=c.observaciones;}
+  }
+}
+
 // Renderiza la línea de trazabilidad de un documento
 function docRenderTraz(t){
   if(!t) return '';
@@ -3618,7 +3833,8 @@ function modalNuevoRegistro(preExpId='', preTipo='', preDesc='', preDocRef=''){
         </div>
       </div>
     </div>`,
-  `<button class="btn btn-sec" onclick="moClose()">Cancelar</button>
+  `<button class="btn btn-sec" onclick="iaAutoLlenarModal('actuacion')" style="margin-right:auto;border-color:var(--acc);color:var(--acc)">📄 Autollenar con IA</button>
+   <button class="btn btn-sec" onclick="moClose()">Cancelar</button>
    <button class="btn btn-pri" onclick="docGuardarRegistro()">Guardar</button>`);
   // Mostrar/ocultar trazabilidad según tipo inicial
   docToggleTipoReg('actuacion');
@@ -3662,8 +3878,10 @@ function docGuardarRegistro(){
     tipo, descripcion:desc, docRef,
     usuario:currentUser?.name||'—', img,
     esDoc: tipoReg==='documento',
-    traz
+    traz,
+    textoOCR: window._iaLastOCR||''
   });
+  window._iaLastOCR='';
 
   const i=DB.expedientes.findIndex(x=>x.id===expId);
   if(i>=0) DB.expedientes[i].actualizado=hoy();
@@ -3677,7 +3895,7 @@ function docGuardarRegistro(){
 // ── Modal subir imagen con IA ──
 function modalNuevoRegistroConImagen(){
   if(!iaHasKey()){
-    toast('Configura tu API key de DeepSeek en Configuración → 🤖 IA','er');
+    toast('Configura tu API key de Gemini en Configuración → 🤖 IA','er');
     return;
   }
   window._nrImgData='';
@@ -3721,7 +3939,7 @@ async function docProcesarArchivo(file){
     const wrap=document.getElementById('img-preview-wrap');
     if(prev){prev.src=b64;wrap.style.display='block';}
 
-    // Llamar a DeepSeek Vision
+    // Llamar a Gemini Vision
     const status=document.getElementById('img-ia-status');
     if(status) status.innerHTML='<span style="color:var(--acc)">🔍 Analizando imagen con IA…</span>';
 
@@ -3743,34 +3961,25 @@ async function docProcesarArchivo(file){
   "numExpediente": "número de expediente si aparece en el documento, sino string vacío"
 }`;
 
-      // Llamar a DeepSeek Vision con imagen
+      // Llamar a Gemini Vision con imagen
       const key=iaGetKey();
       const rawB64=b64.split(',')[1];
       const mimeType=file.type;
       let texto='';
-      const resVision=await fetch('https://api.deepseek.com/chat/completions',{
-        method:'POST',
-        headers:{
-          'Content-Type':'application/json',
-          'Authorization':`Bearer ${key}`
-        },
-        body:JSON.stringify({
-          model:'deepseek-chat',
-          max_tokens:800,
-          messages:[{role:'user',content:[
-            {type:'image_url',image_url:{url:`data:${mimeType};base64,${rawB64}`}},
-            {type:'text',text:prompt}
-          ]}]
-        })
-      });
-      if(!resVision.ok){
-        const err=await resVision.json().catch(()=>({}));
-        throw new Error(err?.error?.message||`Error HTTP ${resVision.status}`);
+      const modelos=['gemini-2.5-flash-lite','gemini-2.0-flash'];
+      let errorUltimo='';
+      for(const modelo of modelos){
+        try{
+          const url='https://generativelanguage.googleapis.com/v1beta/models/'+modelo+':generateContent?key='+key;
+          const body={contents:[{parts:[{inline_data:{mime_type:mimeType,data:rawB64}},{text:prompt}]}],generationConfig:{temperature:0.1,maxOutputTokens:800}};
+          const resV=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+          const dataV=await resV.json();
+          if(dataV?.error){errorUltimo=dataV.error.message;continue;}
+          texto=(dataV?.candidates?.[0]?.content?.parts?.[0]?.text||'').trim();
+          if(texto) break;
+        }catch(e){errorUltimo=e.message;}
       }
-      const dataVision=await resVision.json();
-      texto=(dataVision?.choices?.[0]?.message?.content||'').trim();
-      console.log('DeepSeek Vision respuesta:', texto);
-      if(!texto) throw new Error('Sin respuesta de DeepSeek Vision');
+      if(!texto) throw new Error('Sin respuesta de Gemini: '+errorUltimo);
 
       // Extraer JSON de la respuesta
       let parsed={};
@@ -4023,7 +4232,8 @@ function modalNuevoBandeja(d={}){
         <textarea id="bj-fobs" class="s-inp" style="width:100%;resize:vertical;min-height:64px;padding:9px 13px" placeholder="Notas internas, acción a tomar, etc.">${d.observaciones||''}</textarea>
       </div>
     </div>`,
-  `<button class="btn btn-sec" onclick="moClose()">Cancelar</button>
+  `<button class="btn btn-sec" onclick="iaAutoLlenarModal('bandeja')" style="margin-right:auto;border-color:var(--acc);color:var(--acc)">📄 Autollenar con IA</button>
+   <button class="btn btn-sec" onclick="moClose()">Cancelar</button>
    <button class="btn btn-pri" onclick="bandejaGuardar()">Guardar y asignar código</button>`);
   setTimeout(()=>document.getElementById('bj-fremitente')?.focus(),80);
 }
@@ -4411,7 +4621,11 @@ function modalEtiquetas(){
       (e.administrado||'').toLowerCase().includes(ql)||
       (e.codigo||'').toLowerCase().includes(ql)||
       (e.entidad||'').toLowerCase().includes(ql)||
-      (e.naturaleza||'').toLowerCase().includes(ql)
+      (e.naturaleza||'').toLowerCase().includes(ql)||
+      (e.asunto||'').toLowerCase().includes(ql)||
+      (e.numExpediente||'').toLowerCase().includes(ql)||
+      (e.observaciones||'').toLowerCase().includes(ql)||
+      (e.textoOCR||'').toLowerCase().includes(ql)
     );
     document.getElementById('etq-modal-list').innerHTML=filtrados.length===0
       ?`<div style="padding:20px;text-align:center;color:var(--txt3)">Sin resultados</div>`
@@ -4465,7 +4679,11 @@ function etqModalBuscar(v){
     (e.administrado||'').toLowerCase().includes(ql)||
     (e.codigo||'').toLowerCase().includes(ql)||
     (e.entidad||'').toLowerCase().includes(ql)||
-    (e.naturaleza||'').toLowerCase().includes(ql)
+    (e.naturaleza||'').toLowerCase().includes(ql)||
+    (e.asunto||'').toLowerCase().includes(ql)||
+    (e.numExpediente||'').toLowerCase().includes(ql)||
+    (e.observaciones||'').toLowerCase().includes(ql)||
+    (e.textoOCR||'').toLowerCase().includes(ql)
   );
   document.getElementById('etq-modal-list').innerHTML=filtrados.length===0
     ?`<div style="padding:20px;text-align:center;color:var(--txt3)">Sin resultados</div>`
