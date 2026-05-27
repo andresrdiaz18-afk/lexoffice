@@ -3402,15 +3402,19 @@ async function iaExtraerTexto(file){
   var b64=await fileToBase64(file);
   var rawB64=b64.split(',')[1];
   var mimeType=file.type;
-  if(!mimeType.startsWith('image/')){
-    throw new Error('Sube una imagen (JPG, PNG). Para PDFs, toma una captura de pantalla.');
+  // Soporta imágenes y PDFs
+  if(!mimeType.startsWith('image/') && mimeType!=='application/pdf'){
+    throw new Error('Formato no soportado. Sube una imagen (JPG, PNG) o un PDF.');
   }
   var modelos=['gemini-2.5-flash-lite','gemini-2.0-flash'];
   var errorUltimo='';
+  var promptTexto=mimeType==='application/pdf'
+    ?'Extrae TODO el texto de este documento PDF legal/administrativo peruano. Incluye números de expediente, fechas, nombres, entidades, resoluciones, montos y plazos. Sé exhaustivo y mantén el orden del documento.'
+    :'Transcribe TODO el texto visible en esta imagen de documento legal/administrativo peruano. Incluye números de expediente, fechas, nombres, entidades, resoluciones. Sé exhaustivo.';
   for(var m=0;m<modelos.length;m++){
     try{
       var url='https://generativelanguage.googleapis.com/v1beta/models/'+modelos[m]+':generateContent?key='+key;
-      var body={contents:[{parts:[{inline_data:{mime_type:mimeType,data:rawB64}},{text:'Transcribe TODO el texto visible en esta imagen de documento legal/administrativo peruano. Incluye números de expediente, fechas, nombres, entidades, resoluciones. Sé exhaustivo.'}]}],generationConfig:{temperature:0.1,maxOutputTokens:2000}};
+      var body={contents:[{parts:[{inline_data:{mime_type:mimeType,data:rawB64}},{text:promptTexto}]}],generationConfig:{temperature:0.1,maxOutputTokens:2000}};
       var res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
       var data=await res.json();
       if(data?.error){errorUltimo=data.error.message;continue;}
@@ -3418,7 +3422,7 @@ async function iaExtraerTexto(file){
       if(texto) return texto;
     }catch(e){errorUltimo=e.message;}
   }
-  throw new Error('No se pudo leer la imagen: '+errorUltimo);
+  throw new Error('No se pudo leer el documento: '+errorUltimo);
 }
 
 async function iaAnalizarDoc(textoDoc, modo){
@@ -3469,11 +3473,12 @@ function iaAutoLlenarModal(modo){
   overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
   overlay.innerHTML='<div style="background:var(--sur);border-radius:18px;padding:24px;max-width:340px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.5)">'
     +'<div style="font-size:15px;font-weight:600;color:var(--txt);margin-bottom:6px">📄 Autollenar con IA</div>'
-    +'<div style="font-size:12px;color:var(--txt2);margin-bottom:16px">Puedes agregar varias páginas del mismo documento antes de analizar.</div>'
+    +'<div style="font-size:12px;color:var(--txt2);margin-bottom:16px">Sube fotos, imágenes o PDFs del documento. Puedes agregar varias páginas.</div>'
     +'<div id="ia-pages-list" style="margin-bottom:14px;display:flex;flex-wrap:wrap;gap:8px"></div>'
     +'<div style="display:flex;gap:8px;margin-bottom:14px">'
     +'<button onclick="iaCapturarImagen(\'camera\')" style="flex:1;padding:10px;border-radius:10px;border:1.5px solid var(--acc);background:transparent;color:var(--acc);font-size:13px;cursor:pointer">📷 Cámara</button>'
     +'<button onclick="iaCapturarImagen(\'gallery\')" style="flex:1;padding:10px;border-radius:10px;border:1.5px solid var(--brd);background:transparent;color:var(--txt);font-size:13px;cursor:pointer">🖼 Galería</button>'
+    +'<button onclick="iaCapturarImagen(\'pdf\')" style="flex:1;padding:10px;border-radius:10px;border:1.5px solid var(--brd);background:transparent;color:var(--txt);font-size:13px;cursor:pointer">📎 PDF</button>'
     +'</div>'
     +'<div style="display:flex;gap:8px">'
     +'<button onclick="iaCerrarCaptura()" style="flex:1;padding:10px;border-radius:10px;border:1px solid var(--brd);background:transparent;color:var(--txt2);font-size:13px;cursor:pointer">Cancelar</button>'
@@ -3485,9 +3490,9 @@ function iaAutoLlenarModal(modo){
 function iaCapturarImagen(fuente){
   var input=document.createElement('input');
   input.type='file';
-  input.accept='image/*';
-  if(fuente==='camera') input.capture='environment';
-  if(fuente==='gallery') input.multiple=true;
+  if(fuente==='camera'){ input.accept='image/*'; input.capture='environment'; }
+  else if(fuente==='pdf'){ input.accept='application/pdf'; }
+  else { input.accept='image/*,application/pdf'; input.multiple=true; }
   input.onchange=function(){
     if(!input.files||!input.files.length) return;
     Array.from(input.files).forEach(function(file){
@@ -3507,8 +3512,11 @@ function iaActualizarPreview(){
   var btn=document.getElementById('ia-analizar-btn');
   if(!lista) return;
   lista.innerHTML=window._iaPages.map(function(p,i){
+    var esPDF=p.file.type==='application/pdf';
     return '<div style="position:relative;display:inline-block">'
-      +'<img src="'+p.b64+'" style="width:56px;height:72px;object-fit:cover;border-radius:6px;border:2px solid var(--acc)">'
+      +(esPDF
+        ?'<div style="width:56px;height:72px;border-radius:6px;border:2px solid var(--acc);display:flex;align-items:center;justify-content:center;background:var(--sur2);font-size:22px">📄</div>'
+        :'<img src="'+p.b64+'" style="width:56px;height:72px;object-fit:cover;border-radius:6px;border:2px solid var(--acc)">')
       +'<button onclick="iaEliminarPagina('+i+')" style="position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;background:var(--red);color:#fff;border:none;font-size:10px;cursor:pointer;line-height:18px;padding:0">✕</button>'
       +'<div style="font-size:9px;text-align:center;color:var(--txt2);margin-top:2px">Pág '+(i+1)+'</div></div>';
   }).join('');
