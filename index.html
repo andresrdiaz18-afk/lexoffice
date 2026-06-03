@@ -917,14 +917,14 @@ table.tbl td{padding:10px 14px;font-size:13px;vertical-align:middle;}
         <div class="cfg-sec">
           <div class="cfg-sec-tit">Configuración de Inteligencia Artificial</div>
           <div style="font-size:12px;color:var(--txt3);margin-bottom:16px;line-height:1.6">
-            LexOffice utiliza <strong>Google Gemini</strong> para analizar expedientes y generar borradores de escritos.
-            Obtén tu API key gratuita en <a href="https://aistudio.google.com" target="_blank" style="color:var(--acc)">aistudio.google.com</a> → Get API key.
+            LexOffice utiliza <strong>Claude (Anthropic)</strong> para analizar expedientes y generar borradores de escritos.
+            Obtén tu API key en <a href="https://console.anthropic.com" target="_blank" style="color:var(--acc)">console.anthropic.com</a> → API Keys → Create Key.
           </div>
           <div class="cfg-row">
-            <div><div class="cfg-row-lbl">API Key de Gemini</div><div class="cfg-row-sub">Se guarda solo en tu navegador, nunca en el archivo</div></div>
+            <div><div class="cfg-row-lbl">API Key de Anthropic</div><div class="cfg-row-sub">Se guarda solo en tu navegador, nunca en el archivo</div></div>
           </div>
           <div style="display:flex;gap:8px;margin-top:8px">
-            <input class="cfg-inp" id="cfg-ia-key" type="password" placeholder="AIzaSy…" style="flex:1">
+            <input class="cfg-inp" id="cfg-ia-key" type="password" placeholder="sk-ant-api03-…" style="flex:1">
             <button class="btn btn-sec btn-sm" id="cfg-ia-toggle" onclick="iaToggleVer()" title="Mostrar/ocultar">👁</button>
           </div>
           <div style="display:flex;gap:8px;margin-top:10px">
@@ -944,7 +944,7 @@ table.tbl td{padding:10px 14px;font-size:13px;vertical-align:middle;}
         <div class="cfg-sec">
           <div class="cfg-sec-tit">Costo estimado</div>
           <div class="ic">
-            <div class="ic-row"><span class="ic-k">Modelo usado</span><span class="ic-v">Gemini 2.5 Flash Lite (con fallback)</span></div>
+            <div class="ic-row"><span class="ic-k">Modelo usado</span><span class="ic-v">Claude Sonnet 4</span></div>
             <div class="ic-row"><span class="ic-k">Costo</span><span class="ic-v" style="color:var(--grn)">Gratuito (límite generoso diario)</span></div>
             <div class="ic-row"><span class="ic-k">Tarjeta requerida</span><span class="ic-v" style="color:var(--grn)">No</span></div>
           </div>
@@ -1751,7 +1751,7 @@ function swTab(id,el){
 }
 
 // ══════════════════════════════════════════════
-// MÓDULO DE IA — Google Gemini
+// MÓDULO DE IA — Anthropic Claude
 // ══════════════════════════════════════════════
 const IA_KEY_STORE = 'lxo_ia_key'; // localStorage — nunca en el archivo
 
@@ -1761,14 +1761,14 @@ function iaHasKey(){ return !!iaGetKey(); }
 function iaGuardarKey(){
   const v=(document.getElementById('cfg-ia-key')?.value||'').trim();
   if(!v){ toast('Ingresa la API key primero.','er'); return; }
-  if(!v.startsWith('AIza')){ toast('La key de Gemini debe comenzar con "AIza…"','er'); return; }
+  if(!v.startsWith('sk-ant-')){ toast('La API key de Anthropic debe comenzar con "sk-ant-"','er'); return; }
   localStorage.setItem(IA_KEY_STORE, v);
   iaActualizarEstado();
   toast('API key guardada correctamente.','ok');
 }
 
 function iaBorrarKey(){
-  if(!confirm('¿Eliminar la API key de Gemini?')) return;
+  if(!confirm('¿Eliminar la API key de Anthropic?')) return;
   localStorage.removeItem(IA_KEY_STORE);
   const inp=document.getElementById('cfg-ia-key');
   if(inp) inp.value='';
@@ -1798,30 +1798,26 @@ function iaActualizarEstado(){
 
 // Llamada a la API de DeepSeek
 async function iaLlamar(prompt){
-  const key=iaGetKey();
+  var key=iaGetKey();
   if(!key) throw new Error('Sin API key. Configúrala en Configuración → 🤖 IA');
-  var modelos=['gemini-2.5-flash-lite','gemini-2.0-flash'];
-  var ultimoError='';
-  for(var m=0;m<modelos.length;m++){
-    var modelo=modelos[m];
-    var url='https://generativelanguage.googleapis.com/v1beta/models/'+modelo+':generateContent?key='+key;
-    var body={contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:0.3,maxOutputTokens:1500}};
-    try{
-      var res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-      if(res.status===404||res.status===400||res.status===429||res.status===503){
-        var err=await res.json().catch(function(){return {};});
-        ultimoError=err?.error?.message||'Modelo '+modelo+' no disponible';
-        continue;
-      }
-      if(!res.ok){var err=await res.json().catch(function(){return {};});throw new Error(err?.error?.message||'Error HTTP '+res.status);}
-      var data=await res.json();
-      return data?.candidates?.[0]?.content?.parts?.[0]?.text||'Sin respuesta.';
-    }catch(e){
-      if(e.message.includes('fetch')||e.message.includes('network')) throw new Error('Sin conexión a internet.');
-      ultimoError=e.message;
+  try{
+    var res=await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+      body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1500,messages:[{role:'user',content:prompt}]})
+    });
+    if(!res.ok){
+      var err=await res.json().catch(function(){return {};});
+      if(res.status===401) throw new Error('API key inválida. Verifica en Configuración → 🤖 IA');
+      if(res.status===429) throw new Error('Límite de uso alcanzado. Espera unos minutos.');
+      throw new Error(err?.error?.message||'Error HTTP '+res.status);
     }
+    var data=await res.json();
+    return data?.content?.[0]?.text||'Sin respuesta.';
+  }catch(e){
+    if(e.message.includes('Failed to fetch')||e.message.includes('network')) throw new Error('Sin conexión a internet.');
+    throw e;
   }
-  throw new Error('Ningún modelo disponible: '+ultimoError);
 }
 
 // ── Análisis de expediente ──
@@ -1983,7 +1979,7 @@ function iaGuardarBitacora(expId){
     fecha:new Date().toISOString(),
     tipo:'Borrador generado por IA',
     descripcion:window._iaUltimoTexto.substring(0,500)+(window._iaUltimoTexto.length>500?'…':''),
-    docRef:'Generado automáticamente con Gemini Flash',
+    docRef:'Generado automáticamente con Claude Sonnet 4',
     usuario:currentUser?.name||'—'
   });
   const i=DB.expedientes.findIndex(x=>x.id===expId);
@@ -3406,26 +3402,29 @@ async function iaExtraerTexto(file){
   if(!mimeType.startsWith('image/') && mimeType!=='application/pdf'){
     throw new Error('Formato no soportado. Sube una imagen (JPG, PNG) o un PDF.');
   }
-  // PDFs usan modelo completo y más tokens; imágenes usan lite
   var esPDF=mimeType==='application/pdf';
-  var modelos=esPDF?['gemini-2.5-flash','gemini-2.0-flash']:['gemini-2.5-flash-lite','gemini-2.0-flash'];
   var maxTokens=esPDF?8000:2000;
-  var errorUltimo='';
   var promptTexto=esPDF
     ?'Extrae TODO el texto de TODAS LAS PÁGINAS de este documento PDF legal/administrativo peruano. NO omitas ninguna página. Incluye números de expediente, fechas, nombres, entidades, resoluciones, montos, plazos y especialmente la parte resolutiva (SE RESUELVE, FALLO, etc.). Sé exhaustivo y mantén el orden del documento.'
     :'Transcribe TODO el texto visible en esta imagen de documento legal/administrativo peruano. Incluye números de expediente, fechas, nombres, entidades, resoluciones. Sé exhaustivo.';
-  for(var m=0;m<modelos.length;m++){
-    try{
-      var url='https://generativelanguage.googleapis.com/v1beta/models/'+modelos[m]+':generateContent?key='+key;
-      var body={contents:[{parts:[{inline_data:{mime_type:mimeType,data:rawB64}},{text:promptTexto}]}],generationConfig:{temperature:0.1,maxOutputTokens:maxTokens}};
-      var res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-      var data=await res.json();
-      if(data?.error){errorUltimo=data.error.message;continue;}
-      var texto=(data?.candidates?.[0]?.content?.parts?.[0]?.text||'').trim();
-      if(texto) return texto;
-    }catch(e){errorUltimo=e.message;}
+  var contentParts=[];
+  if(esPDF){
+    contentParts=[{type:'document',source:{type:'base64',media_type:mimeType,data:rawB64}},{type:'text',text:promptTexto}];
+  } else {
+    contentParts=[{type:'image',source:{type:'base64',media_type:mimeType,data:rawB64}},{type:'text',text:promptTexto}];
   }
-  throw new Error('No se pudo leer el documento: '+errorUltimo);
+  try{
+    var res=await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+      body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:maxTokens,messages:[{role:'user',content:contentParts}]})
+    });
+    if(!res.ok){var err=await res.json().catch(function(){return {};});throw new Error(err?.error?.message||'Error HTTP '+res.status);}
+    var data=await res.json();
+    var texto=(data?.content?.[0]?.text||'').trim();
+    if(texto) return texto;
+    throw new Error('Sin respuesta de Claude');
+  }catch(e){throw e;}
 }
 
 async function iaAnalizarDoc(textoDoc, modo){
@@ -3441,21 +3440,18 @@ async function iaAnalizarDoc(textoDoc, modo){
   } else if(modo==='bandeja'){
     prompt='Eres un asistente legal peruano. Analiza el siguiente texto de un documento recibido y extrae campos para registrarlo en bandeja de entrada. REGLAS:\n1. TIPO: Clasifica como Carta, Notificación, Oficio, Memorando, Informe, Resolución, Auto, Sentencia, Requerimiento u Otro.\n2. REMITENTE: Entidad o persona que ENVÍA el documento (no el destinatario).\n3. ASUNTO: Formato: [Tipo de trámite] — [Inmueble/bien si aplica con datos clave] — [N° expediente si existe]. Máximo 1 línea.\n4. OBSERVACIONES: PRIMERO: qué se resuelve o qué acción requiere del administrado. LUEGO: número del documento con fecha, plazo de respuesta si existe. NO incluir cronología de antecedentes.\n\nResponde SOLO en JSON válido, sin backticks:\n{\"tipo\":\"tipo de documento\",\"remitente\":\"entidad o persona que envía\",\"asunto\":\"[Tipo] — [Bien/inmueble] — [Exp.]\",\"observaciones\":\"número de documento, fecha, plazo, acciones requeridas\"}\n\nTEXTO DEL DOCUMENTO:\n'+textoDoc;
   }
-  var modelos=['gemini-2.5-flash-lite','gemini-2.0-flash'];
-  var errorUltimo='';
   var txt='';
-  for(var m=0;m<modelos.length;m++){
-    try{
-      var url='https://generativelanguage.googleapis.com/v1beta/models/'+modelos[m]+':generateContent?key='+key;
-      var body={contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:0.2,maxOutputTokens:800}};
-      var res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-      var data=await res.json();
-      if(data?.error){errorUltimo=data.error.message;continue;}
-      txt=(data?.candidates?.[0]?.content?.parts?.[0]?.text||'').trim();
-      if(txt) break;
-    }catch(e){errorUltimo=e.message;}
-  }
-  if(!txt) throw new Error('La IA no respondió: '+errorUltimo);
+  try{
+    var res=await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+      body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1500,messages:[{role:'user',content:prompt}]})
+    });
+    if(!res.ok){var err=await res.json().catch(function(){return {};});throw new Error(err?.error?.message||'Error HTTP '+res.status);}
+    var data=await res.json();
+    txt=(data?.content?.[0]?.text||'').trim();
+  }catch(e){throw e;}
+  if(!txt) throw new Error('La IA no respondió');
   try{
     var clean=txt.replace(/^```json?\n?/,'').replace(/\n?```$/,'').trim();
     return JSON.parse(clean);
@@ -3906,7 +3902,7 @@ function docGuardarRegistro(){
 // ── Modal subir imagen con IA ──
 function modalNuevoRegistroConImagen(){
   if(!iaHasKey()){
-    toast('Configura tu API key de Gemini en Configuración → 🤖 IA','er');
+    toast('Configura tu API key de Anthropic en Configuración → 🤖 IA','er');
     return;
   }
   window._nrImgData='';
@@ -3972,25 +3968,22 @@ async function docProcesarArchivo(file){
   "numExpediente": "número de expediente si aparece en el documento, sino string vacío"
 }`;
 
-      // Llamar a Gemini Vision con imagen
+      // Llamar a Claude Vision con imagen
       const key=iaGetKey();
       const rawB64=b64.split(',')[1];
       const mimeType=file.type;
       let texto='';
-      const modelos=['gemini-2.5-flash-lite','gemini-2.0-flash'];
-      let errorUltimo='';
-      for(const modelo of modelos){
-        try{
-          const url='https://generativelanguage.googleapis.com/v1beta/models/'+modelo+':generateContent?key='+key;
-          const body={contents:[{parts:[{inline_data:{mime_type:mimeType,data:rawB64}},{text:prompt}]}],generationConfig:{temperature:0.1,maxOutputTokens:800}};
-          const resV=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-          const dataV=await resV.json();
-          if(dataV?.error){errorUltimo=dataV.error.message;continue;}
-          texto=(dataV?.candidates?.[0]?.content?.parts?.[0]?.text||'').trim();
-          if(texto) break;
-        }catch(e){errorUltimo=e.message;}
-      }
-      if(!texto) throw new Error('Sin respuesta de Gemini: '+errorUltimo);
+      try{
+        const resV=await fetch('https://api.anthropic.com/v1/messages',{
+          method:'POST',
+          headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+          body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:800,messages:[{role:'user',content:[{type:'image',source:{type:'base64',media_type:mimeType,data:rawB64}},{type:'text',text:prompt}]}]})
+        });
+        if(!resV.ok){const errV=await resV.json().catch(function(){return {};});throw new Error(errV?.error?.message||'Error HTTP '+resV.status);}
+        const dataV=await resV.json();
+        texto=(dataV?.content?.[0]?.text||'').trim();
+      }catch(e){throw e;}
+      if(!texto) throw new Error('Sin respuesta de Claude Vision');
 
       // Extraer JSON de la respuesta
       let parsed={};
