@@ -3406,15 +3406,18 @@ async function iaExtraerTexto(file){
   if(!mimeType.startsWith('image/') && mimeType!=='application/pdf'){
     throw new Error('Formato no soportado. Sube una imagen (JPG, PNG) o un PDF.');
   }
-  var modelos=['gemini-2.5-flash-lite','gemini-2.0-flash'];
+  // PDFs usan modelo completo y más tokens; imágenes usan lite
+  var esPDF=mimeType==='application/pdf';
+  var modelos=esPDF?['gemini-2.5-flash','gemini-2.0-flash']:['gemini-2.5-flash-lite','gemini-2.0-flash'];
+  var maxTokens=esPDF?8000:2000;
   var errorUltimo='';
-  var promptTexto=mimeType==='application/pdf'
-    ?'Extrae TODO el texto de este documento PDF legal/administrativo peruano. Incluye números de expediente, fechas, nombres, entidades, resoluciones, montos y plazos. Sé exhaustivo y mantén el orden del documento.'
+  var promptTexto=esPDF
+    ?'Extrae TODO el texto de TODAS LAS PÁGINAS de este documento PDF legal/administrativo peruano. NO omitas ninguna página. Incluye números de expediente, fechas, nombres, entidades, resoluciones, montos, plazos y especialmente la parte resolutiva (SE RESUELVE, FALLO, etc.). Sé exhaustivo y mantén el orden del documento.'
     :'Transcribe TODO el texto visible en esta imagen de documento legal/administrativo peruano. Incluye números de expediente, fechas, nombres, entidades, resoluciones. Sé exhaustivo.';
   for(var m=0;m<modelos.length;m++){
     try{
       var url='https://generativelanguage.googleapis.com/v1beta/models/'+modelos[m]+':generateContent?key='+key;
-      var body={contents:[{parts:[{inline_data:{mime_type:mimeType,data:rawB64}},{text:promptTexto}]}],generationConfig:{temperature:0.1,maxOutputTokens:2000}};
+      var body={contents:[{parts:[{inline_data:{mime_type:mimeType,data:rawB64}},{text:promptTexto}]}],generationConfig:{temperature:0.1,maxOutputTokens:maxTokens}};
       var res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
       var data=await res.json();
       if(data?.error){errorUltimo=data.error.message;continue;}
