@@ -3015,93 +3015,62 @@ function modalVerExp(id){
           </div>
         </div>`;}).join('')}`;
 
+
+  // ── Tab 4: Línea de tiempo (todas las actuaciones en orden cronológico) ──
+  const allEvents = [];
+  bit.forEach(function(b){
+    allEvents.push({fecha:b.fecha, tipo:'bitacora', icono:b.esDoc?'📄':'📋', color:b.esDoc?'var(--gold)':'var(--acc)', titulo:b.tipo||'Actuación', detalle:b.descripcion||'', extra:b.docRef?'📄 '+b.docRef:'', usuario:b.usuario||'', traz:b.traz||null});
+  });
+  au.forEach(function(a){
+    allEvents.push({fecha:a.fecha+'T'+(a.hora||'00:00')+':00', tipo:'audiencia', icono:'⚖', color:'var(--blu)', titulo:'Audiencia — '+a.tipo, detalle:a.sala+(a.notas?' · '+a.notas:''), extra:a.estado, usuario:''});
+  });
+  pl.forEach(function(p){
+    var vencido=new Date(p.vencimiento)<new Date();
+    allEvents.push({fecha:p.vencimiento+'T23:59:00', tipo:'plazo', icono:vencido?'⏰':'⏳', color:vencido?'var(--red)':'var(--orn)', titulo:'Plazo — '+p.descripcion, detalle:'Vence: '+fmtDate(p.vencimiento), extra:p.estado+(vencido?' · VENCIDO':''), usuario:''});
+  });
+  allEvents.sort(function(a,b){ return b.fecha.localeCompare(a.fecha); });
+
+  const tabTimeline = allEvents.length===0
+    ? '<div style="text-align:center;padding:28px;color:var(--txt3)"><div style="font-size:28px;margin-bottom:8px">📅</div><div>Sin eventos registrados.</div></div>'
+    : '<div style="position:relative;padding-left:28px">'
+      +'<div style="position:absolute;left:13px;top:0;bottom:0;width:2px;background:var(--brd)"></div>'
+      +allEvents.map(function(ev){
+        var d=new Date(ev.fecha);
+        var fechaStr=d.toLocaleDateString('es-PE',{day:'2-digit',month:'short',year:'numeric'});
+        var horaStr=d.toLocaleTimeString('es-PE',{hour:'2-digit',minute:'2-digit'});
+        var trazHtml='';
+        if(ev.traz){
+          var t=ev.traz;
+          var fmtD=function(f){if(!f)return'—';var p=f.split('-');var meses=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];return parseInt(p[2])+' '+meses[parseInt(p[1])-1]+' '+p[0];};
+          var colorH={'notificado':'#378ADD','respondido':'#639922','resuelto':'#BA7517'};
+          var labelH={'notificado':'Notificado','respondido':'Respondido','resuelto':'Resuelto'};
+          var hito=t.estadoHito||'notificado';
+          trazHtml='<div style="margin-top:8px;padding:8px 10px;background:rgba(0,0,0,.04);border-radius:6px;border-left:3px solid '+(colorH[hito]||'#888')+';font-size:10px;color:var(--txt3)">'
+            +'<span style="font-weight:700;color:'+(colorH[hito]||'#888')+'">'+(labelH[hito]||hito)+'</span>'
+            +(t.fecNotif?' · Notif: '+fmtD(t.fecNotif):'')
+            +(t.medioNotif?' · '+t.medioNotif:'')
+            +(t.plazoDias?' · Plazo: '+t.plazoDias+' días':'')
+            +(t.fecResp?' · Resp: '+fmtD(t.fecResp):'')
+            +(t.resultado?' · '+t.resultado:'')
+            +'</div>';
+        }
+        return '<div style="position:relative;padding:12px 0 16px;border-bottom:1px solid var(--brd)">'
+          +'<div style="position:absolute;left:-28px;top:14px;width:28px;height:28px;border-radius:50%;background:'+ev.color+'22;display:flex;align-items:center;justify-content:center;font-size:14px;z-index:1">'+ev.icono+'</div>'
+          +'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:4px">'
+          +'<div style="font-size:13px;font-weight:700;color:var(--txt)">'+ev.titulo+'</div>'
+          +'<div style="font-size:10px;color:var(--txt3);white-space:nowrap;flex-shrink:0">'+fechaStr+' '+horaStr+'</div>'
+          +'</div>'
+          +'<div style="font-size:12px;color:var(--txt2);line-height:1.5">'+ev.detalle+'</div>'
+          +(ev.extra?'<div style="margin-top:4px"><span style="font-size:10px;padding:2px 7px;border-radius:8px;background:'+ev.color+'15;color:'+ev.color+';font-weight:500">'+ev.extra+'</span></div>':'')
+          +trazHtml
+          +(ev.usuario?'<div style="font-size:10px;color:var(--txt3);margin-top:4px">Por <strong>'+ev.usuario+'</strong></div>':'')
+          +'</div>';
+      }).join('')
+      +'</div>';
+
   moOpen(e.codigo||e.id,`
     <!-- Pestañas internas del modal -->
     <div style="display:flex;border-bottom:2px solid var(--brd);margin-bottom:18px;overflow-x:auto">
-
-  // ── Tab 4: Línea de tiempo ──
-  const allEvents = [];
-  // Bitácora
-  bit.forEach(function(b){
-    allEvents.push({
-      fecha: b.fecha,
-      tipo: 'bitacora',
-      icono: b.esDoc ? '📄' : '📋',
-      color: b.esDoc ? 'var(--gold)' : 'var(--acc)',
-      titulo: b.tipo || 'Actuación',
-      detalle: b.descripcion || '',
-      extra: b.docRef ? '📄 ' + b.docRef : '',
-      usuario: b.usuario || '',
-      traz: b.traz || null
-    });
-  });
-  // Audiencias
-  au.forEach(function(a){
-    allEvents.push({
-      fecha: a.fecha + 'T' + (a.hora || '00:00') + ':00',
-      tipo: 'audiencia',
-      icono: '⚖',
-      color: 'var(--blu)',
-      titulo: 'Audiencia — ' + a.tipo,
-      detalle: a.sala + (a.notas ? ' · ' + a.notas : ''),
-      extra: a.estado,
-      usuario: ''
-    });
-  });
-  // Plazos
-  pl.forEach(function(p){
-    var vencido = new Date(p.vencimiento) < new Date();
-    allEvents.push({
-      fecha: p.vencimiento + 'T23:59:00',
-      tipo: 'plazo',
-      icono: vencido ? '⏰' : '⏳',
-      color: vencido ? 'var(--red)' : 'var(--orn)',
-      titulo: 'Plazo — ' + p.descripcion,
-      detalle: 'Vence: ' + fmtDate(p.vencimiento),
-      extra: p.estado + (vencido ? ' · VENCIDO' : ''),
-      usuario: ''
-    });
-  });
-  // Ordenar cronológicamente (más reciente arriba)
-  allEvents.sort(function(a, b){ return b.fecha.localeCompare(a.fecha); });
-
-  const tabTimeline = allEvents.length === 0
-    ? '<div style="text-align:center;padding:28px;color:var(--txt3)"><div style="font-size:28px;margin-bottom:8px">📅</div><div>Sin eventos registrados.</div></div>'
-    : '<div style="position:relative;padding-left:28px">'
-      + '<div style="position:absolute;left:13px;top:0;bottom:0;width:2px;background:var(--brd)"></div>'
-      + allEvents.map(function(ev){
-          var d = new Date(ev.fecha);
-          var fechaStr = d.toLocaleDateString('es-PE',{day:'2-digit',month:'short',year:'numeric'});
-          var horaStr = d.toLocaleTimeString('es-PE',{hour:'2-digit',minute:'2-digit'});
-          var trazHtml = '';
-          if(ev.traz){
-            var t = ev.traz;
-            var fmtD = function(f){ if(!f) return '—'; var p=f.split('-'); var meses=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic']; return parseInt(p[2])+' '+meses[parseInt(p[1])-1]+' '+p[0]; };
-            var colorH = {'notificado':'#378ADD','respondido':'#639922','resuelto':'#BA7517'};
-            var labelH = {'notificado':'Notificado','respondido':'Respondido','resuelto':'Resuelto'};
-            var hito = t.estadoHito || 'notificado';
-            trazHtml = '<div style="margin-top:8px;padding:8px 10px;background:rgba(0,0,0,.04);border-radius:6px;border-left:3px solid '+(colorH[hito]||'#888')+';font-size:10px;color:var(--txt3)">'
-              + '<span style="font-weight:700;color:'+(colorH[hito]||'#888')+'">'+( labelH[hito]||hito)+'</span>'
-              + (t.fecNotif ? ' · Notif: '+fmtD(t.fecNotif) : '')
-              + (t.medioNotif ? ' · '+t.medioNotif : '')
-              + (t.plazoDias ? ' · Plazo: '+t.plazoDias+' días' : '')
-              + (t.fecResp ? ' · Resp: '+fmtD(t.fecResp) : '')
-              + (t.resultado ? ' · '+t.resultado : '')
-              + '</div>';
-          }
-          return '<div style="position:relative;padding:12px 0 16px;border-bottom:1px solid var(--brd)">'
-            + '<div style="position:absolute;left:-28px;top:14px;width:28px;height:28px;border-radius:50%;background:'+ ev.color+'22;display:flex;align-items:center;justify-content:center;font-size:14px;z-index:1">'+ ev.icono+'</div>'
-            + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:4px">'
-            + '<div style="font-size:13px;font-weight:700;color:var(--txt)">'+ ev.titulo+'</div>'
-            + '<div style="font-size:10px;color:var(--txt3);white-space:nowrap;flex-shrink:0">'+ fechaStr+' '+horaStr+'</div>'
-            + '</div>'
-            + '<div style="font-size:12px;color:var(--txt2);line-height:1.5">'+ ev.detalle+'</div>'
-            + (ev.extra ? '<div style="margin-top:4px"><span style="font-size:10px;padding:2px 7px;border-radius:8px;background:'+ev.color+'15;color:'+ev.color+';font-weight:500">'+ ev.extra+'</span></div>' : '')
-            + trazHtml
-            + (ev.usuario ? '<div style="font-size:10px;color:var(--txt3);margin-top:4px">Por <strong>'+ev.usuario+'</strong></div>' : '')
-            + '</div>';
-        }).join('')
-      + '</div>';
 
       <button id="mvtab-det" ${tabActive} onclick="mvSwTab('det','${id}')">📋 Detalle</button>
       <button id="mvtab-bit" ${tabStyle} onclick="mvSwTab('bit','${id}')">📓 Bitácora (${bit.length})</button>
