@@ -705,8 +705,7 @@ table.tbl td{padding:10px 14px;font-size:13px;vertical-align:middle;}
       </div>
       <div class="topbar-right">
         <div class="page-actions" id="page-actions"></div>
-        <span id="od-sync-indicator" style="font-size:10px;color:var(--txt3);white-space:nowrap">🔌 Sin OneDrive</span>
-        <button id="od-btn" class="btn-logout" style="font-size:11px;padding:4px 8px" onclick="odIsConnected()?odDisconnect():odLogin()">☁️ OneDrive</button>
+        <span id="fb-sync-indicator" style="font-size:10px;color:var(--txt3);white-space:nowrap"></span>
         <button class="btn-bell" id="btn-bell" onclick="openAlertas()">🔔<span class="bell-badge" id="bell-bdg" style="display:none">0</span></button>
       </div>
     </div>
@@ -1010,12 +1009,13 @@ table.tbl td{padding:10px 14px;font-size:13px;vertical-align:middle;}
           <div class="cfg-sec-tit">Información del sistema</div>
           <div class="ic">
             <div class="ic-row"><span class="ic-k">Versión</span><span class="ic-v">3.1.0</span></div>
-            <div class="ic-row"><span class="ic-k">Almacenamiento</span><span class="ic-v" style="color:var(--grn)">IndexedDB (sin límite)</span></div>
-            <div class="ic-row"><span class="ic-k">OneDrive</span><span class="ic-v" id="cfg-od-status">Verificando…</span></div>
+            <div class="ic-row"><span class="ic-k">Almacenamiento</span><span class="ic-v" style="color:var(--grn)">IndexedDB + Firebase (nube)</span></div>
             <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
-              <button class="btn btn-sec btn-sm" onclick="odIsConnected()?odDisconnect():odLogin()" id="cfg-od-btn">Conectar OneDrive</button>
-              <button class="btn btn-sec btn-sm" onclick="odSyncUp().then(()=>toast('Backup subido a OneDrive','ok'))">⬆ Subir ahora</button>
-              <button class="btn btn-sec btn-sm" onclick="odSyncDown().then(d=>{if(d){DB=d;saveDB();toast('Datos restaurados desde OneDrive','ok');navigate(currentPage);}else toast('No se encontró backup en OneDrive','er')})">⬇ Restaurar desde OneDrive</button>
+              <button class="btn btn-sec btn-sm" onclick="fbSyncUp().then(function(){toast('✅ Backup subido a la nube','ok')})">⬆ Subir ahora</button>
+              <button class="btn btn-sec btn-sm" onclick="fbSyncDown().then(function(d){if(d){DB=d;if(!Array.isArray(DB.bitacora))DB.bitacora=[];if(!Array.isArray(DB.historial))DB.historial=[];if(!Array.isArray(DB.bandeja))DB.bandeja=[];idbPut(IDB_KEY_DB,DB).catch(function(){});toast('✅ '+DB.expedientes.length+' expedientes restaurados desde la nube','ok');navigate(currentPage);}else toast('No hay backup en la nube','er')})">⬇ Restaurar desde la nube</button>
+            </div>
+            <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+
             </div>
             <div class="ic-row"><span class="ic-k">Navegador recomendado</span><span class="ic-v">Chrome / Edge</span></div>
             <div class="ic-row"><span class="ic-k">Módulos</span><span class="ic-v" style="color:var(--grn)">4 activos</span></div>
@@ -1158,290 +1158,107 @@ function defaultData(){
 // ══════════════════════════════════════════════
 // ══════════════════════════════════════════════
 // ══════════════════════════════════════════════
-// MÓDULO ONEDRIVE — Sincronización automática
+// MÓDULO FIREBASE — Sincronización en la nube
 // ══════════════════════════════════════════════
-const OD_CLIENT_ID = '65b35655-c86c-4e2c-9346-f142ed010e36';
-const OD_REDIRECT  = 'https://andresrdiaz18-afk.github.io/lexoffice/';
-const OD_SCOPES    = 'Files.ReadWrite';
-const OD_FILE      = '/me/drive/root:/LexOffice/lexoffice_backup.json:/content';
-const OD_TOKEN_KEY = 'lxo_od_token';
-const OD_SYNC_DELAY= 1000; // ms después de saveDB para sincronizar
+const FB_URL = 'https://lexoffice-c4f57-default-rtdb.firebaseio.com';
+const FB_SYNC_DELAY = 2000;
+let _fbSyncTimer = null;
+let _fbSyncing = false;
 
-let _odToken = null;
-let _odSyncTimer = null;
-let _odSyncing = false;
-
-// ── Token ──
-function odGetToken(){ return _odToken || localStorage.getItem(OD_TOKEN_KEY) || ''; }
-function odSetToken(t){ _odToken=t; localStorage.setItem(OD_TOKEN_KEY,t); }
-function odClearToken(){ _odToken=''; localStorage.removeItem(OD_TOKEN_KEY); localStorage.removeItem('lxo_od_refresh'); }
-function odIsConnected(){ return !!odGetToken(); }
-
-// ── PKCE Helpers (Authorization Code Flow — exigido por Microsoft para SPA) ──
-function odBase64Url(buf){
-  return btoa(String.fromCharCode(...new Uint8Array(buf)))
-    .replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
-}
-async function odSha256(str){
-  const data=new TextEncoder().encode(str);
-  return await crypto.subtle.digest('SHA-256',data);
-}
-function odRandomString(len){
-  const arr=new Uint8Array(len);
-  crypto.getRandomValues(arr);
-  return Array.from(arr,b=>('0'+b.toString(16)).slice(-2)).join('');
+// Ruta en Firebase basada en el usuario logueado
+function fbPath(){
+  var user = currentUser ? currentUser.user : 'default';
+  return FB_URL + '/users/' + user + '/backup.json';
 }
 
-// ── Login OneDrive con PKCE ──
-async function odLogin(){
-  // 1. Generar code_verifier y code_challenge
-  const verifier=odRandomString(64);
-  const challenge=odBase64Url(await odSha256(verifier));
-  sessionStorage.setItem('lxo_od_verifier',verifier);
-
-  const url=`https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize`
-    +`?client_id=${OD_CLIENT_ID}`
-    +`&response_type=code`
-    +`&redirect_uri=${encodeURIComponent(OD_REDIRECT)}`
-    +`&scope=${encodeURIComponent(OD_SCOPES)}`
-    +`&code_challenge=${challenge}`
-    +`&code_challenge_method=S256`
-    +`&prompt=select_account`;
-
-  const popup=window.open(url,'od_login','width=500,height=650,left=200,top=100');
-  if(!popup){ toast('Habilita las ventanas emergentes para conectar OneDrive','er'); return; }
-
-  // Escuchar el código de autorización del popup
-  const handler=async e=>{
-    if(e.data?.type==='od_code'){
-      window.removeEventListener('message',handler);
-      await odExchangeCode(e.data.code);
-    }
-  };
-  window.addEventListener('message',handler);
-
-  // Polling fallback
-  const poll=setInterval(()=>{
-    try{
-      if(popup.closed){ clearInterval(poll); return; }
-      const u=new URL(popup.location.href);
-      const code=u.searchParams.get('code');
-      if(code){
-        clearInterval(poll);
-        popup.close();
-        odExchangeCode(code);
-      }
-    }catch(e){ /* cross-origin, esperando */ }
-  },500);
-}
-
-// ── Intercambiar code por access_token ──
-async function odExchangeCode(code){
-  const verifier=sessionStorage.getItem('lxo_od_verifier');
-  if(!verifier){ toast('Error de sesión OAuth. Reintenta.','er'); return; }
+// Subir datos a Firebase
+async function fbSyncUp(){
+  if(_fbSyncing || !currentUser) return;
+  _fbSyncing = true;
+  fbSetIndicator('syncing');
   try{
-    const body=new URLSearchParams({
-      client_id:OD_CLIENT_ID,
-      grant_type:'authorization_code',
-      code:code,
-      redirect_uri:OD_REDIRECT,
-      code_verifier:verifier,
-      scope:OD_SCOPES
+    var payload = JSON.stringify({
+      DB: DB,
+      version: '3.2',
+      fecha: new Date().toISOString()
     });
-    const res=await fetch('https://login.microsoftonline.com/consumers/oauth2/v2.0/token',{
-      method:'POST',
-      headers:{'Content-Type':'application/x-www-form-urlencoded'},
-      body:body.toString()
+    var res = await fetch(fbPath(), {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: payload
     });
-    const data=await res.json();
-    if(data.access_token){
-      odSetToken(data.access_token);
-      if(data.refresh_token) localStorage.setItem('lxo_od_refresh',data.refresh_token);
-      sessionStorage.removeItem('lxo_od_verifier');
-      toast('✅ OneDrive conectado correctamente','ok');
-      // PRIMERO descargar, LUEGO subir — no sobrescribir datos remotos
-      var remoto=await odSyncDown();
-      if(remoto && remoto.expedientes && remoto.expedientes.length > DB.expedientes.length){
-        DB=remoto;
-        if(!Array.isArray(DB.bitacora)) DB.bitacora=[];
-        if(!Array.isArray(DB.historial)) DB.historial=[];
-        if(!Array.isArray(DB.bandeja)) DB.bandeja=[];
-        idbPut(IDB_KEY_DB,DB).catch(function(){});
-        toast('☁️ '+remoto.expedientes.length+' expedientes cargados desde OneDrive','ok');
-        navigate(currentPage);
-      } else {
-        odSyncUp();
-      }
-      odUpdateUI();
-    } else {
-      console.error('Token exchange falló:',data);
-      toast('Error al conectar OneDrive: '+(data.error_description||data.error||'desconocido'),'er');
-    }
-  }catch(e){
-    console.error('odExchangeCode error:',e);
-    toast('Error al conectar OneDrive','er');
-  }
-}
-
-// ── Renovar token con refresh_token ──
-async function odRefreshToken(){
-  const refresh=localStorage.getItem('lxo_od_refresh');
-  if(!refresh) return false;
-  try{
-    const body=new URLSearchParams({
-      client_id:OD_CLIENT_ID,
-      grant_type:'refresh_token',
-      refresh_token:refresh,
-      scope:OD_SCOPES
-    });
-    const res=await fetch('https://login.microsoftonline.com/consumers/oauth2/v2.0/token',{
-      method:'POST',
-      headers:{'Content-Type':'application/x-www-form-urlencoded'},
-      body:body.toString()
-    });
-    const data=await res.json();
-    if(data.access_token){
-      odSetToken(data.access_token);
-      if(data.refresh_token) localStorage.setItem('lxo_od_refresh',data.refresh_token);
-      return true;
-    }
-  }catch(e){ console.warn('Refresh falló:',e); }
-  return false;
-}
-
-function odHandleRedirect(){
-  // Detecta el código de autorización en la URL (cuando el popup vuelve de Microsoft)
-  const params=new URLSearchParams(window.location.search);
-  const code=params.get('code');
-  if(code){
-    try{
-      if(window.opener){
-        window.opener.postMessage({type:'od_code',code:code},'*');
-        window.close();
-        return true;
-      }
-    }catch(e){}
-    // Fallback si no es popup
-    odExchangeCode(code).then(()=>{
-      window.history.replaceState({},'',OD_REDIRECT);
-    });
-    return true;
-  }
-  return false;
-}
-
-// ── Subir backup a OneDrive ──
-async function odSyncUp(){
-  const token=odGetToken();
-  if(!token||_odSyncing) return;
-  _odSyncing=true;
-  odSetSyncIndicator('syncing');
-  try{
-    const payload=JSON.stringify({
-      DB, version:'3.1', motor:'IndexedDB',
-      fecha:new Date().toISOString()
-    });
-    const res=await fetch(`https://graph.microsoft.com/v1.0${OD_FILE}`,{
-      method:'PUT',
-      headers:{
-        'Authorization':`Bearer ${token}`,
-        'Content-Type':'application/json'
-      },
-      body:payload
-    });
-    if(res.status===401){
-      const refreshed=await odRefreshToken();
-      if(refreshed){ _odSyncing=false; return odSyncUp(); }
-      odClearToken(); odSetSyncIndicator('disconnected'); return;
-    }
-    if(!res.ok) throw new Error(`HTTP ${res.status}`);
-    odSetSyncIndicator('ok');
-    localStorage.setItem('lxo_od_last_sync', new Date().toISOString());
-  }catch(e){
-    console.warn('OneDrive sync error:',e);
-    odSetSyncIndicator('error');
+    if(!res.ok) throw new Error('HTTP ' + res.status);
+    fbSetIndicator('ok');
+    localStorage.setItem('lxo_fb_last_sync', new Date().toISOString());
+    console.info('Firebase: backup subido, ' + DB.expedientes.length + ' expedientes');
+  } catch(e) {
+    console.warn('Firebase sync error:', e);
+    fbSetIndicator('error');
   } finally {
-    _odSyncing=false;
+    _fbSyncing = false;
   }
 }
 
-// ── Descargar backup desde OneDrive ──
-async function odSyncDown(){
-  var token=odGetToken();
-  if(!token){ console.warn('odSyncDown: sin token'); return null; }
+// Descargar datos desde Firebase
+async function fbSyncDown(){
   try{
-    // Paso 1: obtener metadata del archivo
-    var metaUrl='https://graph.microsoft.com/v1.0/me/drive/root:/LexOffice/lexoffice_backup.json';
-    var metaRes=await fetch(metaUrl,{headers:{'Authorization':'Bearer '+token}});
-    if(metaRes.status===404){ console.warn('odSyncDown: archivo no existe en OneDrive'); return null; }
-    if(metaRes.status===401){
-      var refreshed=await odRefreshToken();
-      if(refreshed) return odSyncDown();
-      odClearToken(); return null;
-    }
-    if(!metaRes.ok){ console.warn('odSyncDown: error metadata HTTP',metaRes.status); return null; }
-    var meta=await metaRes.json();
-    var downloadUrl=meta['@microsoft.graph.downloadUrl'];
-    if(!downloadUrl){ console.warn('odSyncDown: no hay downloadUrl'); return null; }
-    // Paso 2: descargar contenido real (con cache-buster)
-    var fileRes=await fetch(downloadUrl+'&nocache='+Date.now());
-    if(!fileRes.ok){ console.warn('odSyncDown: error descarga HTTP',fileRes.status); return null; }
-    var txt=await fileRes.text();
-    var data=JSON.parse(txt);
-    console.info('odSyncDown: descargado,',data?.DB?.expedientes?.length||0,'expedientes');
+    var res = await fetch(fbPath());
+    if(!res.ok){ console.warn('Firebase download HTTP', res.status); return null; }
+    var data = await res.json();
+    if(!data) return null;
+    console.info('Firebase: descargado, ' + (data?.DB?.expedientes?.length || 0) + ' expedientes');
     if(data?.DB?.expedientes) return data.DB;
-    console.warn('odSyncDown: JSON válido pero sin DB.expedientes');
     return null;
-  }catch(e){ console.error('odSyncDown error:',e); return null; }
-}
-
-// ── Sincronización diferida (no bloquea cada keystroke) ──
-function odScheduleSync(){
-  if(!odIsConnected()) return;
-  if(_odSyncTimer) clearTimeout(_odSyncTimer);
-  _odSyncTimer=setTimeout(()=>odSyncUp(), OD_SYNC_DELAY);
-}
-
-// ── Indicador visual en la barra de título ──
-function odSetSyncIndicator(state){
-  const el=document.getElementById('od-sync-indicator');
-  if(!el) return;
-  const map={
-    ok:       {txt:'☁️ Sincronizado', color:'var(--grn)'},
-    syncing:  {txt:'🔄 Sincronizando…', color:'var(--gold)'},
-    error:    {txt:'⚠️ Error sync', color:'var(--red)'},
-    disconnected:{txt:'🔌 Sin OneDrive', color:'var(--txt3)'}
-  };
-  const s=map[state]||map.disconnected;
-  el.textContent=s.txt;
-  el.style.color=s.color;
-}
-
-function odUpdateUI(){
-  const btn=document.getElementById('od-btn');
-  const cfgBtn=document.getElementById('cfg-od-btn');
-  const cfgStatus=document.getElementById('cfg-od-status');
-  const indicator=document.getElementById('od-sync-indicator');
-  const lastSync=localStorage.getItem('lxo_od_last_sync');
-  const lastStr=lastSync?new Date(lastSync).toLocaleString('es-PE',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}):'nunca';
-  if(odIsConnected()){
-    if(btn){ btn.textContent='☁️ ✓'; btn.style.color='var(--grn)'; }
-    if(cfgBtn){ cfgBtn.textContent='Desconectar OneDrive'; }
-    if(cfgStatus){ cfgStatus.innerHTML=`<span style="color:var(--grn)">✅ Conectado</span> · último sync: ${lastStr}`; }
-    if(indicator) odSetSyncIndicator('ok');
-  } else {
-    if(btn){ btn.textContent='☁️ OneDrive'; btn.style.color=''; }
-    if(cfgBtn){ cfgBtn.textContent='Conectar OneDrive'; }
-    if(cfgStatus){ cfgStatus.innerHTML='<span style="color:var(--txt3)">No conectado</span>'; }
-    if(indicator) odSetSyncIndicator('disconnected');
+  } catch(e) {
+    console.warn('Firebase download error:', e);
+    return null;
   }
 }
 
-function odDisconnect(){
-  if(!confirm('¿Desconectar OneDrive? Los datos locales se mantienen.')) return;
-  odClearToken();
-  odUpdateUI();
-  toast('OneDrive desconectado.','in');
+// Sincronización diferida
+function fbScheduleSync(){
+  if(!currentUser) return;
+  if(_fbSyncTimer) clearTimeout(_fbSyncTimer);
+  _fbSyncTimer = setTimeout(function(){ fbSyncUp(); }, FB_SYNC_DELAY);
+}
+
+// Indicador visual
+function fbSetIndicator(state){
+  var el = document.getElementById('fb-sync-indicator');
+  if(!el) return;
+  var map = {
+    ok:      '☁️ Sincronizado',
+    syncing: '🔄 Sincronizando…',
+    error:   '⚠️ Error sync',
+    off:     ''
+  };
+  el.textContent = map[state] || '';
+  el.style.color = state === 'ok' ? 'var(--grn)' : state === 'error' ? 'var(--red)' : 'var(--gold)';
+}
+
+// Cargar datos de Firebase al iniciar (si hay datos remotos mejores)
+async function fbLoadOnStart(){
+  if(!currentUser) return;
+  try{
+    var remote = await fbSyncDown();
+    if(remote && remote.expedientes && remote.expedientes.length > DB.expedientes.length){
+      DB = remote;
+      if(!Array.isArray(DB.bitacora)) DB.bitacora = [];
+      if(!Array.isArray(DB.historial)) DB.historial = [];
+      if(!Array.isArray(DB.bandeja)) DB.bandeja = [];
+      if(!Array.isArray(DB.catEntidades)) DB.catEntidades = [];
+      if(!Array.isArray(DB.catNaturalezas)) DB.catNaturalezas = [];
+      idbPut(IDB_KEY_DB, DB).catch(function(){});
+      toast('☁️ ' + remote.expedientes.length + ' expedientes cargados desde la nube', 'ok');
+      navigate(currentPage);
+    } else if(DB.expedientes.length > 0) {
+      // Local tiene datos, subir a Firebase por si es la primera vez
+      fbSyncUp();
+    }
+    fbSetIndicator('ok');
+  } catch(e) {
+    console.warn('fbLoadOnStart error:', e);
+  }
 }
 
 // MOTOR DE ALMACENAMIENTO — IndexedDB
@@ -1481,8 +1298,8 @@ function saveDB(){
   } else {
     try{localStorage.setItem('lxo_fb',JSON.stringify(DB));}catch{}
   }
-  // Sincronizar con OneDrive en background (diferido)
-  odScheduleSync();
+  // Sincronizar con Firebase
+  fbScheduleSync();
 }
 
 // ── Configuración (liviana → localStorage) ──
@@ -1498,49 +1315,11 @@ function startApp(){
   const splash=document.getElementById('splash');
   if(splash)splash.style.display='none';
   if(!DB)DB=defaultData();
-  // Manejar redirect de OneDrive
-  if(odHandleRedirect()){ bootApp(); return; }
-  // Si hay token, intentar cargar desde OneDrive
-  if(odIsConnected()){
-    odSyncDown().then(remoteDB=>{
-      if(remoteDB){
-        // Fusionar: usar el más reciente
-        const localDate=DB.expedientes?.length>0?(DB.expedientes[DB.expedientes.length-1].actualizado||''):'';
-        const remoteDate=remoteDB.expedientes?.length>0?(remoteDB.expedientes[remoteDB.expedientes.length-1].actualizado||''):'';
-        if(remoteDB.expedientes.length>=DB.expedientes.length || remoteDate>=localDate){
-          DB=remoteDB;
-          if(!Array.isArray(DB.bitacora)) DB.bitacora=[];
-          if(!Array.isArray(DB.historial)) DB.historial=[];
-          if(!Array.isArray(DB.bandeja)) DB.bandeja=[];
-          idbPut(IDB_KEY_DB,DB).catch(()=>{});
-          toast('☁️ Datos cargados desde OneDrive','ok');
-        }
-      }
-      bootApp();
-    }).catch(()=>bootApp());
-  } else {
-    bootApp();
-  }
+  bootApp();
 }
 
 // Arranque: IDB en paralelo — el login aparece de inmediato
 (function(){
-  // ── DETECCIÓN TEMPRANA: ¿somos el popup de OneDrive? ──
-  const _earlyParams=new URLSearchParams(window.location.search);
-  const _earlyCode=_earlyParams.get('code');
-  const _earlyError=_earlyParams.get('error');
-  if((_earlyCode||_earlyError) && window.opener){
-    try{
-      if(_earlyCode){
-        window.opener.postMessage({type:'od_code', code:_earlyCode}, '*');
-        document.body.innerHTML='<div style="font-family:sans-serif;text-align:center;padding:60px;color:#888"><p>✅ Autorización recibida.<br>Cerrando ventana…</p></div>';
-      } else {
-        document.body.innerHTML='<div style="font-family:sans-serif;text-align:center;padding:60px;color:#c33"><p>⚠️ '+(_earlyParams.get('error_description')||_earlyError)+'</p></div>';
-      }
-      setTimeout(()=>window.close(), 1000);
-      return; // No inicializar la app
-    }catch(e){ window.close(); return; }
-  }
 
   // 1. Mostrar login de inmediato con datos por defecto
   DB=defaultData();
@@ -1612,7 +1391,6 @@ function doLogin(){
     return;
   }
   currentUser=found;
-  // Guardar sesión para restaurar tras redirect de OneDrive
   
   document.getElementById('login-wrap').style.display='none';
   document.getElementById('app').style.display='flex';
@@ -1627,10 +1405,11 @@ function doLogin(){
   if(bt)bt.textContent=document.body.classList.contains('light')?'🌙':'☀';
   goPage('dashboard');
   setTimeout(()=>{updateBell();iniciarFrases();checkAutoBackup();const{ve,ho}=getAlertData();if(ve.length||ho.length)openAlertas();},400);
+  // Cargar datos de Firebase después del login
+  setTimeout(function(){ fbLoadOnStart(); }, 800);
 }
 
 function doLogout(){
-  localStorage.removeItem('lxo_session_user');
   detenerFrases();
   currentUser=null;
   document.getElementById('app').style.display='none';
@@ -5310,8 +5089,6 @@ window.addEventListener('resize',()=>{
 // ARRANQUE — se llama cuando IDB ya cargó DB
 // ══════════════════════════════════════════════
 function bootApp(){
-  // Inicializar UI de OneDrive
-  setTimeout(()=>{ odUpdateUI(); }, 200);
   // Restaurar sesión si existe (para no pedir login tras acciones en la app)
   try{
     const saved=localStorage.getItem('lxo_session_user');
@@ -5326,6 +5103,8 @@ function bootApp(){
         document.getElementById('sb-name').textContent=found.name;
         document.getElementById('sb-role').textContent=found.role==='admin'?'Administrador':'Asistente';
         navigate('dashboard');
+        // Cargar datos de Firebase
+        setTimeout(function(){ fbLoadOnStart(); }, 500);
         return;
       }
     }
