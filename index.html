@@ -706,6 +706,7 @@ table.tbl td{padding:10px 14px;font-size:13px;vertical-align:middle;}
       <div class="topbar-right">
         <div class="page-actions" id="page-actions"></div>
         <span id="fb-sync-indicator" style="font-size:10px;color:var(--txt3);white-space:nowrap"></span>
+        <button id="fb-sync-btn" onclick="fbForzarSync()" style="background:transparent;border:1px solid var(--brd);border-radius:6px;padding:3px 8px;cursor:pointer;font-size:11px;color:var(--txt2);white-space:nowrap" title="Forzar sincronización">🔄</button>
         <button class="btn-bell" id="btn-bell" onclick="openAlertas()">🔔<span class="bell-badge" id="bell-bdg" style="display:none">0</span></button>
       </div>
     </div>
@@ -1177,10 +1178,12 @@ async function fbSyncUp(){
   _fbSyncing = true;
   fbSetIndicator('syncing');
   try{
+    var fbNow = new Date().toISOString();
+    DB._fbFecha = fbNow;
     var payload = JSON.stringify({
       DB: DB,
       version: '3.2',
-      fecha: new Date().toISOString()
+      fecha: fbNow
     });
     var res = await fetch(fbPath(), {
       method: 'PUT',
@@ -1226,14 +1229,31 @@ function fbScheduleSync(){
 function fbSetIndicator(state){
   var el = document.getElementById('fb-sync-indicator');
   if(!el) return;
+  var hora = new Date().toLocaleTimeString('es-PE',{hour:'2-digit',minute:'2-digit'});
   var map = {
-    ok:      '☁️ Sincronizado',
-    syncing: '🔄 Sincronizando…',
-    error:   '⚠️ Error sync',
+    ok:      '☁️ ' + hora,
+    syncing: '🔄 Subiendo…',
+    error:   '⚠️ Error',
     off:     ''
   };
   el.textContent = map[state] || '';
   el.style.color = state === 'ok' ? 'var(--grn)' : state === 'error' ? 'var(--red)' : 'var(--gold)';
+}
+
+// Forzar sincronización manual
+async function fbForzarSync(){
+  if(!currentUser){ toast('Inicia sesión primero','er'); return; }
+  var btn = document.getElementById('fb-sync-btn');
+  if(btn){ btn.style.pointerEvents='none'; btn.textContent='⏳'; }
+  try{
+    // Primero subir local
+    await fbSyncUp();
+    toast('✅ Datos sincronizados con la nube','ok');
+  }catch(e){
+    toast('Error al sincronizar: '+e.message,'er');
+  }finally{
+    if(btn){ btn.style.pointerEvents='auto'; btn.textContent='🔄'; }
+  }
 }
 
 // Cargar datos de Firebase al iniciar (si hay datos remotos mejores)
@@ -1241,18 +1261,28 @@ async function fbLoadOnStart(){
   if(!currentUser) return;
   try{
     var remote = await fbSyncDown();
-    if(remote && remote.expedientes && remote.expedientes.length > DB.expedientes.length){
-      DB = remote;
-      if(!Array.isArray(DB.bitacora)) DB.bitacora = [];
-      if(!Array.isArray(DB.historial)) DB.historial = [];
-      if(!Array.isArray(DB.bandeja)) DB.bandeja = [];
-      if(!Array.isArray(DB.catEntidades)) DB.catEntidades = [];
-      if(!Array.isArray(DB.catNaturalezas)) DB.catNaturalezas = [];
-      idbPut(IDB_KEY_DB, DB).catch(function(){});
-      toast('☁️ ' + remote.expedientes.length + ' expedientes cargados desde la nube', 'ok');
-      navigate(currentPage);
+    if(remote && remote.expedientes){
+      // Comparar por fecha del último cambio — el más reciente gana
+      var localSync = localStorage.getItem('lxo_fb_last_sync') || '';
+      var remoteDate = remote._fbFecha || '';
+      var localDate = DB._fbFecha || localSync || '';
+      // También comparar cantidad total de registros (expedientes + bandeja + bitácora)
+      var remoteTotal = (remote.expedientes||[]).length + (remote.bandeja||[]).length + (remote.bitacora||[]).length;
+      var localTotal = (DB.expedientes||[]).length + (DB.bandeja||[]).length + (DB.bitacora||[]).length;
+      if(remoteDate > localDate || remoteTotal > localTotal){
+        DB = remote;
+        if(!Array.isArray(DB.bitacora)) DB.bitacora = [];
+        if(!Array.isArray(DB.historial)) DB.historial = [];
+        if(!Array.isArray(DB.bandeja)) DB.bandeja = [];
+        if(!Array.isArray(DB.catEntidades)) DB.catEntidades = [];
+        if(!Array.isArray(DB.catNaturalezas)) DB.catNaturalezas = [];
+        idbPut(IDB_KEY_DB, DB).catch(function(){});
+        toast('☁️ Datos actualizados desde la nube', 'ok');
+        navigate(currentPage);
+      } else {
+        fbSyncUp();
+      }
     } else if(DB.expedientes.length > 0) {
-      // Local tiene datos, subir a Firebase por si es la primera vez
       fbSyncUp();
     }
     fbSetIndicator('ok');
