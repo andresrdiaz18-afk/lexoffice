@@ -1011,6 +1011,16 @@ table.tbl td{padding:10px 14px;font-size:13px;vertical-align:middle;}
           <div class="ic">
             <div class="ic-row"><span class="ic-k">Versión</span><span class="ic-v">3.1.0</span></div>
             <div class="ic-row"><span class="ic-k">Almacenamiento</span><span class="ic-v" style="color:var(--grn)">IndexedDB + Firebase (nube)</span></div>
+            <div class="ic-row"><span class="ic-k">Clave de sincronización</span><span class="ic-v" id="cfg-sync-status"></span></div>
+            <div style="margin-top:8px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+              <div style="position:relative;flex:1;min-width:180px">
+                <input class="cfg-inp" id="cfg-sync-key" type="password" placeholder="Ingresa o genera una clave" style="width:100%;padding-right:36px">
+                <button type="button" onclick="togglePassView('cfg-sync-key',this)" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:transparent;border:none;cursor:pointer;font-size:14px;color:var(--txt2)">👁</button>
+              </div>
+              <button class="btn btn-sec btn-sm" onclick="cfgGenerarSyncKey()">🔑 Generar</button>
+              <button class="btn btn-pri btn-sm" onclick="cfgGuardarSyncKey()">Guardar</button>
+            </div>
+            <div style="font-size:10px;color:var(--txt3);margin-top:6px">⚠️ Usa la MISMA clave en todos tus dispositivos. Sin clave, los datos no se sincronizan.</div>
             <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
               <button class="btn btn-sec btn-sm" onclick="fbSyncUp().then(function(){toast('✅ Backup subido a la nube','ok')})">⬆ Subir ahora</button>
               <button class="btn btn-sec btn-sm" onclick="fbSyncDown().then(function(d){if(d){DB=d;if(!Array.isArray(DB.bitacora))DB.bitacora=[];if(!Array.isArray(DB.historial))DB.historial=[];if(!Array.isArray(DB.bandeja))DB.bandeja=[];idbPut(IDB_KEY_DB,DB).catch(function(){});toast('✅ '+DB.expedientes.length+' expedientes restaurados desde la nube','ok');navigate(currentPage);}else toast('No hay backup en la nube','er')})">⬇ Restaurar desde la nube</button>
@@ -1167,14 +1177,21 @@ let _fbSyncTimer = null;
 let _fbSyncing = false;
 
 // Ruta en Firebase basada en el usuario logueado
+// Clave de sincronización — sin ella no se accede a los datos
+const FB_SYNC_KEY_STORE = 'lxo_fb_sync_key';
+function fbGetSyncKey(){ return localStorage.getItem(FB_SYNC_KEY_STORE) || ''; }
+function fbSetSyncKey(k){ localStorage.setItem(FB_SYNC_KEY_STORE, k); }
+
 function fbPath(){
+  var key = fbGetSyncKey();
+  if(!key) return null;
   var user = currentUser ? currentUser.user : 'default';
-  return FB_URL + '/users/' + user + '/backup.json';
+  return FB_URL + '/apps/' + key + '/users/' + user + '/backup.json';
 }
 
 // Subir datos a Firebase
 async function fbSyncUp(){
-  if(_fbSyncing || !currentUser) return;
+  if(_fbSyncing || !currentUser || !fbGetSyncKey()) return;
   _fbSyncing = true;
   fbSetIndicator('syncing');
   try{
@@ -1204,6 +1221,7 @@ async function fbSyncUp(){
 
 // Descargar datos desde Firebase
 async function fbSyncDown(){
+  if(!fbGetSyncKey()) return null;
   try{
     var res = await fetch(fbPath());
     if(!res.ok){ console.warn('Firebase download HTTP', res.status); return null; }
@@ -1240,6 +1258,35 @@ function fbSetIndicator(state){
   el.style.color = state === 'ok' ? 'var(--grn)' : state === 'error' ? 'var(--red)' : 'var(--gold)';
 }
 
+// Gestión de clave de sincronización
+function cfgGenerarSyncKey(){
+  var key='';
+  var chars='abcdefghijklmnopqrstuvwxyz0123456789';
+  for(var i=0;i<24;i++) key+=chars.charAt(Math.floor(Math.random()*chars.length));
+  document.getElementById('cfg-sync-key').value=key;
+  document.getElementById('cfg-sync-key').type='text';
+}
+function cfgGuardarSyncKey(){
+  var key=(document.getElementById('cfg-sync-key').value||'').trim();
+  if(!key||key.length<8){toast('La clave debe tener al menos 8 caracteres.','er');return;}
+  fbSetSyncKey(key);
+  toast('✅ Clave guardada. Usa esta misma clave en tus otros dispositivos.','ok');
+  cfgActualizarSyncStatus();
+  fbSyncUp();
+}
+function cfgActualizarSyncStatus(){
+  var el=document.getElementById('cfg-sync-status');
+  if(!el) return;
+  var key=fbGetSyncKey();
+  if(key){
+    el.innerHTML='<span style="color:var(--grn)">✅ Activa</span> · '+key.substring(0,6)+'…';
+  } else {
+    el.innerHTML='<span style="color:var(--red)">⚠️ Sin clave</span>';
+  }
+  var inp=document.getElementById('cfg-sync-key');
+  if(inp&&key) inp.value=key;
+}
+
 // Forzar sincronización manual
 async function fbForzarSync(){
   if(!currentUser){ toast('Inicia sesión primero','er'); return; }
@@ -1259,6 +1306,7 @@ async function fbForzarSync(){
 // Cargar datos de Firebase al iniciar (si hay datos remotos mejores)
 async function fbLoadOnStart(){
   if(!currentUser) return;
+  if(!fbGetSyncKey()){ toast('⚠️ Configura tu clave de sincronización en Configuración','in'); return; }
   try{
     var remote = await fbSyncDown();
     if(remote && remote.expedientes){
@@ -4888,6 +4936,7 @@ function doBorrarTodo(){
 // CONFIGURACIÓN
 // ══════════════════════════════════════════════
 function openCfg(){
+  setTimeout(cfgActualizarSyncStatus, 100);
   // Sincronizar controles
   const cfg=loadCfg();
   const isLight=document.body.classList.contains('light');
