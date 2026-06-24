@@ -1657,13 +1657,14 @@ function iaActualizarEstado(){
 async function iaLlamar(prompt){
   var key=iaGetKey();
   if(!key) throw new Error('Sin API key. Configúrala en Configuración → 🤖 IA');
-  var modelos=['gemini-2.5-flash','gemini-2.0-flash'];
+  var modelos=['gemini-2.5-flash','gemini-2.0-flash','gemini-1.5-flash'];
   var ultimoError='';
   for(var m=0;m<modelos.length;m++){
     try{
       var url='https://generativelanguage.googleapis.com/v1beta/models/'+modelos[m]+':generateContent?key='+key;
       var body={contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:0.3,maxOutputTokens:1500}};
       var res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      if(res.status===503||res.status===429){ultimoError='Modelo '+modelos[m]+' ocupado';continue;}
       if(!res.ok){var err=await res.json().catch(function(){return {};});ultimoError=err?.error?.message||'Error HTTP '+res.status;continue;}
       var data=await res.json();
       if(data?.error){ultimoError=data.error.message;continue;}
@@ -3319,13 +3320,14 @@ async function iaExtraerTexto(file){
   var promptTexto=esPDF
     ?'Extrae TODO el texto de TODAS LAS PÁGINAS de este documento PDF legal/administrativo peruano. NO omitas ninguna página. Incluye números de expediente, fechas, nombres, entidades, resoluciones, montos, plazos y especialmente la parte resolutiva (SE RESUELVE, FALLO, etc.). Sé exhaustivo y mantén el orden del documento.'
     :'Transcribe TODO el texto visible en esta imagen de documento legal/administrativo peruano. Incluye números de expediente, fechas, nombres, entidades, resoluciones. Sé exhaustivo.';
-  var modelos=esPDF?['gemini-2.5-flash','gemini-2.0-flash']:['gemini-2.5-flash-lite','gemini-2.5-flash'];
+  var modelos=esPDF?['gemini-2.5-flash','gemini-2.0-flash']:['gemini-2.5-flash-lite','gemini-2.5-flash','gemini-2.0-flash'];
   var errorUltimo='';
   for(var m=0;m<modelos.length;m++){
     try{
       var url='https://generativelanguage.googleapis.com/v1beta/models/'+modelos[m]+':generateContent?key='+key;
       var body={contents:[{parts:[{inline_data:{mime_type:mimeType,data:rawB64}},{text:promptTexto}]}],generationConfig:{temperature:0.1,maxOutputTokens:maxTokens}};
       var res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      if(res.status===503||res.status===429){errorUltimo='Modelo '+modelos[m]+' ocupado';continue;}
       var data=await res.json();
       if(data?.error){errorUltimo=data.error.message;continue;}
       var texto=(data?.candidates?.[0]?.content?.parts?.[0]?.text||'').trim();
@@ -3348,14 +3350,15 @@ async function iaAnalizarDoc(textoDoc, modo){
   } else if(modo==='bandeja'){
     prompt='Eres un asistente legal peruano. Analiza el siguiente texto de un documento recibido y extrae campos para registrarlo en bandeja de entrada. REGLAS:\n1. TIPO: Clasifica como Carta, Notificación, Oficio, Memorando, Informe, Resolución, Auto, Sentencia, Requerimiento u Otro.\n2. REMITENTE: Entidad o persona que ENVÍA el documento (no el destinatario).\n3. ASUNTO: Formato: [Tipo de trámite] — [Inmueble/bien si aplica con datos clave] — [N° expediente si existe]. Máximo 1 línea.\n4. OBSERVACIONES: PRIMERO: qué se resuelve o qué acción requiere del administrado. LUEGO: número del documento con fecha, plazo de respuesta si existe. NO incluir cronología de antecedentes.\n\nResponde SOLO en JSON válido, sin backticks:\n{\"tipo\":\"tipo de documento\",\"remitente\":\"entidad o persona que envía\",\"asunto\":\"[Tipo] — [Bien/inmueble] — [Exp.]\",\"observaciones\":\"número de documento, fecha, plazo, acciones requeridas\"}\n\nTEXTO DEL DOCUMENTO:\n'+textoDoc;
   }
-  var modelos=['gemini-2.5-flash','gemini-2.0-flash'];
+  var modelos=['gemini-2.5-flash','gemini-2.0-flash','gemini-1.5-flash'];
   var errorUltimo='';
   var txt='';
   for(var m=0;m<modelos.length;m++){
     try{
       var url='https://generativelanguage.googleapis.com/v1beta/models/'+modelos[m]+':generateContent?key='+key;
-      var body={contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:0.2,maxOutputTokens:1500}};
+      var body={contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:0.2,maxOutputTokens:1500,responseMimeType:'application/json'}};
       var res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      if(res.status===503||res.status===429){errorUltimo='Modelo '+modelos[m]+' no disponible ('+res.status+')';continue;}
       var data=await res.json();
       if(data?.error){errorUltimo=data.error.message;continue;}
       txt=(data?.candidates?.[0]?.content?.parts?.[0]?.text||'').trim();
@@ -3364,9 +3367,9 @@ async function iaAnalizarDoc(textoDoc, modo){
   }
   if(!txt) throw new Error('La IA no respondió: '+errorUltimo);
   try{
-    // Limpiar respuesta: quitar backticks, texto extra antes/después del JSON
-    var clean=txt.replace(/```json?\s*/gi,'').replace(/```/g,'').trim();
-    // Si hay texto antes del {, buscar el primer { 
+    // Limpiar respuesta de Gemini — quitar cualquier variante de backticks y texto extra
+    var clean=txt.replace(/\s*```json\s*/gi,'').replace(/\s*```\s*/g,'').trim();
+    // Extraer el bloque JSON exacto (primer { hasta último })
     var startIdx=clean.indexOf('{');
     var endIdx=clean.lastIndexOf('}');
     if(startIdx>=0 && endIdx>startIdx){
