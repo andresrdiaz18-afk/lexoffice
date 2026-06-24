@@ -3364,7 +3364,14 @@ async function iaAnalizarDoc(textoDoc, modo){
   }
   if(!txt) throw new Error('La IA no respondió: '+errorUltimo);
   try{
-    var clean=txt.replace(/^```json?\n?/,'').replace(/\n?```$/,'').trim();
+    // Limpiar respuesta: quitar backticks, texto extra antes/después del JSON
+    var clean=txt.replace(/```json?\s*/gi,'').replace(/```/g,'').trim();
+    // Si hay texto antes del {, buscar el primer { 
+    var startIdx=clean.indexOf('{');
+    var endIdx=clean.lastIndexOf('}');
+    if(startIdx>=0 && endIdx>startIdx){
+      clean=clean.substring(startIdx, endIdx+1);
+    }
     return JSON.parse(clean);
   }catch(e){
     console.warn('IA devolvió JSON inválido:',txt);
